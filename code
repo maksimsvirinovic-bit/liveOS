@@ -1126,7 +1126,6 @@ void putc(char c) {
         cy++;
         if (cy >= rows) {
             scroll_up();
-            print("ok");
             cy = rows - 1;
         }
     }
@@ -1155,7 +1154,6 @@ void putc(char c) {
             cx = 0;
             cy++;
             if (cy >= rows) {
-                print("oke");
                 scroll_up();
                 cy = rows - 1;
             }
@@ -1811,10 +1809,10 @@ Variable* lgs_get_var(LGSParser* p, const char* name) {
     
     for (uint32_t i = 0; i < p->variables->size; i++) {
         Variable* v = *(Variable**)p->variables->at(p->variables, i);
-        // Compare name from variable metadata
-        // TODO: Store name in Variable struct
+        if (strcmp(v->name, name) == 0) {
+            return v;
+        }
     }
-    
     return NULL;
 }
 
@@ -2212,13 +2210,14 @@ typedef enum {
 
 // Variable value (union)
 typedef struct {
+    char name[64];
     VarType type;
     int is_const;
     union {
         int32_t int_val;
         char* str_val;
         int bool_val;
-        Vector* code_lines; // Vector of char*
+        Vector* code_lines;
         void* ptr_val;
     } value;
 } Variable;
@@ -4704,6 +4703,7 @@ void log_warn(const char* fmt, ...);
 void log_info(const char* fmt, ...);
 void log_debug(const char* fmt, ...);
 void log(const char* level, const char* module, const char* message);
+void logger_daemon(void);
 
 #endif
 
@@ -5736,6 +5736,16 @@ void log(const char* level, const char* module, const char* message) {
     strcat(line, "\n");
     print(line);
     log_to_file(line);
+}
+
+void logger_daemon(void) {
+    while (1) {
+        // Пишем что-то в лог
+        log_info("Heartbeat");
+        
+        // Спим 1000 ms (кооперативно)
+        task_sleep(1000);
+    }
 }
 
 ----- FILE: src/kernel/lib/vector.h -----
@@ -7655,6 +7665,29 @@ static int sscanf(const char* str, const char* fmt, ...) {
 
 #endif            
 
+----- FILE: src/kernel/lib/spinlock.h -----
+
+// spinlock.h
+typedef struct {
+    volatile uint32_t lock;
+} Spinlock;
+
+static inline void spin_lock(Spinlock* lock) {
+    while (__sync_lock_test_and_set(&lock->lock, 1)) {
+        while (lock->lock) {
+            __asm__ volatile("pause");
+        }
+    }
+}
+
+static inline void spin_unlock(Spinlock* lock) {
+    __sync_lock_release(&lock->lock);
+}
+
+static inline void spin_init(Spinlock* lock) {
+    lock->lock = 0;
+}
+
 ----- FILE: src/kernel/lib/heap.c -----
 
 #include "heap.h"
@@ -8708,7 +8741,7 @@ void driver_loader_init(void) {
     driver_export_kernel_symbol("acpi_init", acpi_init);
 
                     
-    driver_export_kernel_symbol("shell_run", shell_run);
+    driver_export_kernel_symbol("shell_task", shell_task);
 
                        
     driver_export_kernel_symbol("keyboard_init", keyboard_init);
@@ -20106,10 +20139,10 @@ void shell_loop(void) {
     print("  up and вниз arrows for history\n\n");
     reset_color();
     history_pos = history->size;
-    shell_run();
+    shell_task();
 }
 
-void shell_run(void) {
+void shell_task(void) {
     char cmd[256];
     shell_script_init();
     while (1) {
@@ -20122,6 +20155,8 @@ void shell_run(void) {
         }
 
         shell_execute(cmd);
+        // Уступаем другим задачам
+        task_yield();
     }
 }
 
@@ -20133,6 +20168,7 @@ void shell_run(void) {
 void shell_run(void);
 void shell_loop(void);
 void shell_execute(char* cmd);
+void shell_task(void);
 
 #endif
 
@@ -20256,6 +20292,233 @@ void elf_abort_current(void);
 
 #endif
 
+----- FILE: src/kernel/core/scheduler.c -----
+
+#include "scheduler.h"
+#include "apic_timer.h"
+#include "heap.h"
+#include "console.h"
+#include "str.h"
+
+// ===== ГЛОБАЛЬНЫЕ =====
+static Vector* tasks = NULL;
+static Task* current = NULL;
+static Task* idle_task = NULL;
+static uint32_t task_count = 0;
+
+// ===== IDLE TASK (работает, когда нечего делать) =====
+static void idle_entry(void) {
+    while (1) {
+        __asm__ volatile("hlt");
+    }
+}
+
+// ===== ИНИЦИАЛИЗАЦИЯ =====
+void scheduler_init(void) {
+    tasks = vector_create(sizeof(Task*), 16);
+    current = NULL;
+    task_count = 0;
+    
+    // Создаём idle task
+    idle_task = task_create("idle", idle_entry, 0);
+    
+    printf("[Scheduler] Initialized\n");
+}
+
+// ===== СОЗДАНИЕ ЗАДАЧИ =====
+Task* task_create(const char* name, void (*entry)(void), uint32_t priority) {
+    Task* task = (Task*)kmalloc(sizeof(Task));
+    memset(task, 0, sizeof(Task));
+    
+    strcpy(task->name, name);
+    task->state = TASK_READY;
+    task->priority = priority;
+    task->next = NULL;
+    
+    // Выделяем стек (16 KB)
+    task->stack_size = 16384;
+    task->stack = kmalloc(task->stack_size);
+    task->stack_top = (void*)(((uint64_t)task->stack + task->stack_size) & ~0xFULL);
+    
+    // Настраиваем начальный контекст
+    // RIP = entry, RSP = stack_top
+    task->context.rip = (uint64_t)entry;
+    task->context.rsp = (uint64_t)task->stack_top;
+    task->context.rflags = 0x202;  // IF = 1
+    task->context.cs = 0x38;
+    task->context.ss = 0x30;
+    task->context.ds = 0x30;
+    task->context.es = 0x30;
+    
+    tasks->push(tasks, &task);
+    task_count++;
+    
+    printf("[Scheduler] Task created: %s (priority=%d)\n", name, priority);
+    return task;
+}
+
+// ===== УНИЧТОЖЕНИЕ ЗАДАЧИ =====
+void task_destroy(Task* task) {
+    if (!task) return;
+    
+    // Находим и удаляем
+    for (uint32_t i = 0; i < tasks->size; i++) {
+        Task** t = (Task**)tasks->at(tasks, i);
+        if (*t == task) {
+            tasks->remove(tasks, i);
+            break;
+        }
+    }
+    
+    if (task->stack) kfree(task->stack);
+    kfree(task);
+    task_count--;
+}
+
+// ===== ПЕРЕКЛЮЧЕНИЕ КОНТЕКСТА (АССЕМБЛЕР) =====
+extern void context_switch(TaskContext* old, TaskContext* new);
+
+// ===== ВЫБОР СЛЕДУЮЩЕЙ ЗАДАЧИ =====
+static Task* scheduler_pick_next(void) {
+    if (tasks->size == 0) return idle_task;
+    
+    // Round-robin с приоритетами
+    static uint32_t last_index = 0;
+    
+    // Ищем следующую ready-задачу
+    for (uint32_t i = 0; i < tasks->size; i++) {
+        uint32_t idx = (last_index + i + 1) % tasks->size;
+        Task* task = *(Task**)tasks->at(tasks, idx);
+        
+        if (task->state == TASK_READY) {
+            last_index = idx;
+            return task;
+        }
+    }
+    
+    return idle_task;
+}
+
+// ===== ТИК ПЛАНИРОВЩИКА (из таймера) =====
+void scheduler_tick(void) {
+    // Обновляем спящие задачи
+    uint64_t now = apic_timer_get_ms();
+    
+    for (uint32_t i = 0; i < tasks->size; i++) {
+        Task* task = *(Task**)tasks->at(tasks, i);
+        
+        if (task->state == TASK_SLEEPING && now >= task->sleep_until) {
+            task->state = TASK_READY;
+        }
+    }
+    
+    // Вытесняем текущую задачу
+    if (current && current->state == TASK_RUNNING) {
+        current->state = TASK_READY;
+    }
+    
+    Task* next = scheduler_pick_next();
+    if (next != current) {
+        Task* old = current;
+        current = next;
+        current->state = TASK_RUNNING;
+        current->switch_count++;
+        
+        if (old) {
+            context_switch(&old->context, &current->context);
+        } else {
+            // Первый запуск
+            context_switch(NULL, &current->context);
+        }
+    }
+}
+
+// ===== КООПЕРАТИВНОЕ ПЕРЕКЛЮЧЕНИЕ =====
+void task_yield(void) {
+    if (!current) return;
+    
+    current->state = TASK_READY;
+    
+    Task* next = scheduler_pick_next();
+    if (next != current) {
+        Task* old = current;
+        current = next;
+        current->state = TASK_RUNNING;
+        
+        context_switch(&old->context, &current->context);
+    }
+}
+
+// ===== СОН =====
+void task_sleep(uint32_t ms) {
+    if (!current) return;
+    
+    current->sleep_until = apic_timer_get_ms() + ms;
+    current->state = TASK_SLEEPING;
+    
+    Task* next = scheduler_pick_next();
+    Task* old = current;
+    current = next;
+    current->state = TASK_RUNNING;
+    
+    context_switch(&old->context, &current->context);
+}
+
+// ===== ЗАВЕРШЕНИЕ =====
+void task_exit(void) {
+    if (!current) return;
+    
+    current->state = TASK_DEAD;
+    
+    Task* next = scheduler_pick_next();
+    Task* old = current;
+    current = next;
+    current->state = TASK_RUNNING;
+    
+    context_switch(&old->context, &current->context);
+    // Сюда не вернёмся
+}
+
+// ===== ЗАПУСК ПЛАНИРОВЩИКА =====
+void scheduler_start(void) {
+    printf("[Scheduler] Starting...\n");
+    
+    // Запускаем первую задачу
+    current = scheduler_pick_next();
+    current->state = TASK_RUNNING;
+    
+    printf("[Scheduler] First task: %s\n", current->name);
+    
+    // Прыгаем в первую задачу
+    context_switch(NULL, &current->context);
+}
+
+// ===== СПИСОК ЗАДАЧ =====
+void scheduler_list(void) {
+    printf("\n=== Tasks ===\n");
+    printf("%-20s %-10s %-6s %-8s %s\n", 
+           "Name", "State", "Prio", "Switches", "Sleep(ms)");
+    printf("-------------------------------------------------------\n");
+    
+    for (uint32_t i = 0; i < tasks->size; i++) {
+        Task* task = *(Task**)tasks->at(tasks, i);
+        const char* state_str = 
+            task->state == TASK_READY ? "ready" :
+            task->state == TASK_RUNNING ? "running" :
+            task->state == TASK_SLEEPING ? "sleeping" :
+            task->state == TASK_DEAD ? "dead" : "unknown";
+        
+        printf("%-20s %-10s %-6d %-8d %llu\n", 
+               task->name, state_str, task->priority, 
+               task->switch_count, task->sleep_until);
+    }
+    printf("Total: %d tasks\n", task_count);
+}
+
+Task* scheduler_current(void) {
+    return current;
+}
+
 ----- FILE: src/kernel/core/main.c -----
 
 #include "lib/types.h"
@@ -20296,9 +20559,13 @@ void kernel_main(void) {
     gdt_init();
     tss_init();
     idt_init();
+
+    #define USE_APIC
     
     #ifdef USE_APIC
     apic_init();
+    apic_timer_init(1000);
+    apic_timer_start();
     #else
     pic_init();
     #endif
@@ -20352,28 +20619,28 @@ void kernel_main(void) {
     e1000_enable_interrupts();
     
     arp_init(10 << 24 | 2 << 8 | 2);
-
-    extern char __bss_start[];
-    extern char __bss_end[];
-
-    printf("BSS: 0x%p - 0x%p (size: %d bytes, %d MB)\n", 
-           __bss_start, __bss_end, 
-           (uint32_t)(__bss_end - __bss_start),
-           (uint32_t)(__bss_end - __bss_start) / (1024 * 1024));
-
                                   
     __asm__ volatile("sti");
     
     print("Good!\n");
-    
-    for (uint32_t i = 0; i < info->Height * (info->Pitch / 4); i++) {
-        ((uint32_t*)info->FbAddr)[i] = COLOR_BLACK;
-    }
 
     keyboard_reset_input();
     console_init((uint32_t*)info->FbAddr, info->Width, info->Height, info->Pitch);
 
-    shell_loop();
+    log("DEBUG", "CONSOLE", "console inited!");
+
+    task_create("shell", shell_task, 10);
+    task_create("logger", logger_daemon, 1);
+
+    log("DEBUG", "TASKING", "Tasks registred!");
+        
+    for (uint32_t i = 0; i < info->Height * (info->Pitch / 4); i++) {
+        ((uint32_t*)info->FbAddr)[i] = COLOR_BLACK;
+    }
+
+    scheduler_start();
+
+    //shell_loop();
 }
 
 ----- FILE: src/kernel/core/system_config.h -----
@@ -20666,6 +20933,61 @@ const KernelApi* kernel_api_get(void) {
     return &kernel_api;
 }
 
+----- FILE: src/kernel/core/scheduler.h -----
+
+#ifndef SCHEDULER_H
+#define SCHEDULER_H
+
+#include "types.h"
+#include "vector.h"
+
+// ===== СОСТОЯНИЯ ЗАДАЧ =====
+#define TASK_READY     0
+#define TASK_RUNNING   1
+#define TASK_SLEEPING  2
+#define TASK_BLOCKED   3
+#define TASK_DEAD      4
+
+// ===== КОНТЕКСТ ЗАДАЧИ =====
+typedef struct {
+    uint64_t rax, rbx, rcx, rdx;
+    uint64_t rsi, rdi, rbp, rsp;
+    uint64_t r8, r9, r10, r11, r12, r13, r14, r15;
+    uint64_t rip;
+    uint64_t rflags;
+    uint64_t cs, ss, ds, es, fs, gs;
+} TaskContext;
+
+// ===== ЗАДАЧА =====
+typedef struct Task {
+    char name[64];
+    TaskContext context;
+    uint32_t state;
+    uint32_t priority;
+    uint64_t sleep_until;       // ms
+    uint64_t total_time;        // всего времени
+    uint64_t switch_count;      // сколько раз переключались
+    void* stack;
+    uint64_t stack_size;
+    void* stack_top;
+    struct Task* next;
+} Task;
+
+// ===== API =====
+void scheduler_init(void);
+Task* task_create(const char* name, void (*entry)(void), uint32_t priority);
+void task_destroy(Task* task);
+void task_yield(void);
+void task_sleep(uint32_t ms);
+void task_exit(void);
+void scheduler_tick(void);      // Из таймера
+void scheduler_start(void);
+void scheduler_list(void);
+
+Task* scheduler_current(void);
+
+#endif
+
 ----- FILE: src/kernel/core/kernel_api.h -----
 
 #ifndef KERNEL_API_H
@@ -20805,22 +21127,6 @@ void apic_disable(void) {
     uint32_t svr = apic_read(APIC_SVR);
     svr &= ~APIC_SVR_ENABLE;
     apic_write(APIC_SVR, svr);
-}
-
-                     
-void apic_timer_init(uint32_t freq_hz) {
-                                     
-    apic_write(APIC_TIMER_DIV, 0x3);                 
-    
-                                          
-                                     
-    uint32_t count = 1000000000 / 16 / freq_hz;
-    apic_write(APIC_TIMER_INIT, count);
-    
-                                                      
-    apic_write(APIC_LVT_TIMER, 0x20 | 0x20000);                          
-    
-    printf("APIC Timer: Enabled at %d Hz\n", freq_hz);
 }
 
 ----- FILE: src/kernel/arch/x86_64/acpi.h -----
@@ -21226,6 +21532,78 @@ void idt_set_gate(uint8_t vector, void* handler, uint16_t selector, uint8_t flag
 
 #endif
 
+----- FILE: src/kernel/arch/x86_64/context.S -----
+
+.section .text
+.global context_switch
+.type context_switch, @function
+
+# void context_switch(TaskContext* old, TaskContext* new)
+# RDI = old, RSI = new
+context_switch:
+    test %rdi, %rdi
+    jz .restore
+    
+    # === СОХРАНЕНИЕ ===
+    mov %rax, 0(%rdi)
+    mov %rbx, 8(%rdi)
+    mov %rcx, 16(%rdi)
+    mov %rdx, 24(%rdi)
+    mov %rsi, 32(%rdi)
+    mov %rbp, 48(%rdi)
+    mov %r8,  64(%rdi)
+    mov %r9,  72(%rdi)
+    mov %r10, 80(%rdi)
+    mov %r11, 88(%rdi)
+    mov %r12, 96(%rdi)
+    mov %r13, 104(%rdi)
+    mov %r14, 112(%rdi)
+    mov %r15, 120(%rdi)
+    
+    # RSP и RIP
+    mov %rsp, 56(%rdi)
+    mov (%rsp), %rax
+    mov %rax, 128(%rdi)
+    
+    # RFLAGS
+    pushfq
+    pop %rax
+    mov %rax, 136(%rdi)
+    
+    # RDI — ПОСЛЕДНИМ, но с сохранением в стек!
+    # Используем RAX как временный
+    push %rdi
+    pop %rax                    # RAX = old
+    mov %rdi, 40(%rax)          # сохраняем RDI по адресу old+40
+    
+.restore:
+    # === ВОССТАНОВЛЕНИЕ ===
+    mov 0(%rsi), %rax
+    mov 8(%rsi), %rbx
+    mov 16(%rsi), %rcx
+    mov 24(%rsi), %rdx
+    mov 48(%rsi), %rbp
+    mov 64(%rsi), %r8
+    mov 72(%rsi), %r9
+    mov 80(%rsi), %r10
+    mov 88(%rsi), %r11
+    mov 96(%rsi), %r12
+    mov 104(%rsi), %r13
+    mov 112(%rsi), %r14
+    mov 120(%rsi), %r15
+    
+    mov 56(%rsi), %rsp
+    
+    push 136(%rsi)
+    popfq
+    
+    push 128(%rsi)
+    
+    mov 32(%rsi), %rdi          # RDI
+    mov 40(%rsi), %rsi          # RSI — тоже последним
+    
+    ret
+
 ----- FILE: src/kernel/arch/x86_64/acpi.c -----
 
 #include "acpi.h"
@@ -21518,6 +21896,163 @@ int asm_assemble_file(const char* input_path, const char* output_path);
 int parse_num(const char* s, uint64_t* val);
 
 #endif
+
+----- FILE: src/kernel/arch/x86_64/apic_timer.c -----
+
+#include "apic_timer.h"
+#include "apic.h"
+#include "console.h"
+#include "io.h"
+#include "str.h"
+
+// ===== APIC BASE =====
+#define APIC_BASE 0xFEE00000
+
+static volatile uint32_t* apic = (volatile uint32_t*)APIC_BASE;
+
+// ===== ГЛОБАЛЬНЫЕ =====
+static uint64_t ticks = 0;
+static uint32_t ticks_per_ms = 0;
+static uint32_t timer_frequency = 0;
+
+// ===== APIC READ/WRITE =====
+static uint32_t apic_read(uint32_t reg) {
+    return *(volatile uint32_t*)((uint8_t*)apic + reg);
+}
+
+static void apic_write(uint32_t reg, uint32_t val) {
+    *(volatile uint32_t*)((uint8_t*)apic + reg) = val;
+}
+
+// ===== КАЛИБРОВКА APIC TIMER =====
+// Используем PIT для калибровки
+static void pit_sleep_ms(uint32_t ms) {
+    // PIT работает на частоте 1.193182 MHz
+    // Для 1 ms: 1193182 / 1000 = 1193 тиков
+    uint32_t pit_ticks = 1193 * ms;
+    
+    // Устанавливаем PIT на один выстрел
+    outb(0x43, 0xB0);  // Channel 2, mode 0 (interrupt on terminal count)
+    outb(0x42, pit_ticks & 0xFF);
+    outb(0x42, (pit_ticks >> 8) & 0xFF);
+    
+    // Ждём, пока счётчик не дойдёт до 0
+    // Читаем статус PIT
+    for (volatile int i = 0; i < 10000000; i++) {
+        // Просто задержка
+    }
+}
+
+static uint32_t apic_timer_calibrate(void) {
+    printf("[APIC Timer] Calibrating...\n");
+    
+    // 1. Устанавливаем делитель = 16
+    apic_write(APIC_TIMER_DIVIDE, APIC_DIV_16);
+    
+    // 2. Устанавливаем начальное значение = максимум
+    apic_write(APIC_TIMER_INITIAL, 0xFFFFFFFF);
+    
+    // 3. Ждём 10 ms (используем PIT)
+    // Для точности лучше использовать PIT, но для простоты — цикл
+    for (volatile uint64_t i = 0; i < 10000000; i++);
+    
+    // 4. Читаем текущее значение
+    uint32_t current = apic_read(APIC_TIMER_CURRENT);
+    
+    // 5. Останавливаем таймер
+    apic_write(APIC_TIMER_INITIAL, 0);
+    
+    // 6. Вычисляем частоту
+    // elapsed = 0xFFFFFFFF - current
+    // За 10 ms прошло elapsed тиков
+    // frequency = elapsed * 100 (для 1 секунды)
+    uint32_t elapsed = 0xFFFFFFFF - current;
+    uint32_t frequency = elapsed * 100;  // ticks per second
+    
+    printf("[APIC Timer] Elapsed: %u ticks in ~10ms\n", elapsed);
+    printf("[APIC Timer] Frequency: %u Hz\n", frequency);
+    
+    return frequency;
+}
+
+// ===== ИНИЦИАЛИЗАЦИЯ =====
+int apic_timer_init(uint32_t frequency_hz) {
+    printf("[APIC Timer] Initializing...\n");
+    
+    // 1. Проверяем, что APIC доступен
+    if (!apic) {
+        printf("[APIC Timer] APIC not available!\n");
+        return -1;
+    }
+    
+    // 2. Калибруем (узнаём частоту шины APIC)
+    uint32_t apic_frequency = apic_timer_calibrate();
+    if (apic_frequency == 0) {
+        printf("[APIC Timer] Calibration failed!\n");
+        return -1;
+    }
+    
+    // 3. Вычисляем ticks_per_ms
+    ticks_per_ms = apic_frequency / 1000;
+    
+    // 4. Вычисляем начальное значение для нужной частоты
+    // С делителем 16: initial = apic_frequency / 16 / frequency_hz
+    uint32_t initial = apic_frequency / 16 / frequency_hz;
+    
+    printf("[APIC Timer] Target: %u Hz, Initial: %u\n", frequency_hz, initial);
+    
+    // 5. Настраиваем таймер
+    apic_write(APIC_TIMER_DIVIDE, APIC_DIV_16);
+    apic_write(APIC_TIMER_INITIAL, initial);
+    apic_write(APIC_TIMER_LVT, APIC_TIMER_VECTOR | APIC_TIMER_PERIODIC);
+    
+    timer_frequency = frequency_hz;
+    ticks = 0;
+    
+    printf("[APIC Timer] Ready (%u Hz)\n", frequency_hz);
+    return 0;
+}
+
+// ===== СТАРТ/СТОП =====
+void apic_timer_start(void) {
+    // Включаем таймер (снимаем маску)
+    uint32_t lvt = apic_read(APIC_TIMER_LVT);
+    lvt &= ~(1 << 16);  // Снимаем бит маски
+    apic_write(APIC_TIMER_LVT, lvt);
+}
+
+void apic_timer_stop(void) {
+    // Маскируем таймер
+    uint32_t lvt = apic_read(APIC_TIMER_LVT);
+    lvt |= (1 << 16);  // Устанавливаем бит маски
+    apic_write(APIC_TIMER_LVT, lvt);
+}
+
+// ===== ОБРАБОТЧИК ПРЕРЫВАНИЯ =====
+void apic_timer_handler(void) {
+    ticks++;
+
+    scheduler_tick();
+    
+    // Отправляем EOI
+    apic_write(0xB0, 0);  // APIC_EOI
+}
+
+// ===== ВРЕМЯ =====
+uint64_t apic_timer_get_ticks(void) {
+    return ticks;
+}
+
+uint64_t apic_timer_get_ms(void) {
+    return ticks * 1000 / timer_frequency;
+}
+
+void apic_timer_sleep_ms(uint32_t ms) {
+    uint64_t target = apic_timer_get_ms() + ms;
+    while (apic_timer_get_ms() < target) {
+        __asm__ volatile("hlt");
+    }
+}
 
 ----- FILE: src/kernel/arch/x86_64/pic.h -----
 
@@ -22056,6 +22591,7 @@ void tss_dump(void) {
 
 #include "arch/x86_64/idt.h"
 #include "arch/x86_64/exception.h"
+#include "arch/x86_64/apic_timer.h"
 #include "drivers/console.h"
 #include "lib/str.h"
 #include "arch/x86_64/io.h"
@@ -22068,10 +22604,7 @@ static IDTEntry idt[256] __attribute__((aligned(16)));
 static IDTPtr idt_ptr;
 
 extern void exception_handler(int vector, ExceptionContext* ctx);
-
-                                                   
-                                                                                                 
-                                                                                         
+                                                                                 
 __attribute__((naked)) static void common_exception_wrapper(void) {
     __asm__ volatile (
                                                                     
@@ -22100,9 +22633,39 @@ __attribute__((naked)) static void common_exception_wrapper(void) {
     );
 }
 
+#define MAKE_IRQ(num, handler) \
+__attribute__((naked)) static void irq_##num##_isr(void) { \
+    __asm__ volatile ( \
+        "pushq $0\n\t" \
+        "pushq $" #num "\n\t" \
+        "jmp common_irq_wrapper\n\t" \
+        : : : "memory" \
+    ); \
+}
 
-                                                     
-                                                                             
+__attribute__((naked)) static void common_irq_wrapper(void) {
+    __asm__ volatile (
+        "pushq %%r15\n\t" "pushq %%r14\n\t" "pushq %%r13\n\t" "pushq %%r12\n\t"
+        "pushq %%r11\n\t" "pushq %%r10\n\t" "pushq %%r9\n\t"  "pushq %%r8\n\t"
+        "pushq %%rbp\n\t" "pushq %%rdi\n\t" "pushq %%rsi\n\t" "pushq %%rdx\n\t"
+        "pushq %%rcx\n\t" "pushq %%rbx\n\t" "pushq %%rax\n\t"
+        
+        "movq 120(%%rsp), %%rdi\n\t"   // IRQ number
+        "call irq_dispatcher\n\t"
+        
+        "popq %%rax\n\t"  "popq %%rbx\n\t"  "popq %%rcx\n\t"  "popq %%rdx\n\t"
+        "popq %%rsi\n\t"  "popq %%rdi\n\t"  "popq %%rbp\n\t"  "popq %%r8\n\t"
+        "popq %%r9\n\t"   "popq %%r10\n\t"  "popq %%r11\n\t" "popq %%r12\n\t"
+        "popq %%r13\n\t"  "popq %%r14\n\t"  "popq %%r15\n\t"
+        
+        "addq $16, %%rsp\n\t"
+        "iretq\n\t"
+        : : : "memory"
+    );
+}
+
+extern void irq_dispatcher(int irq);
+
 #define MAKE_ISR(num) \
 __attribute__((naked)) static void exception_##num##_isr(void) { \
     __asm__ volatile ( \
@@ -22142,7 +22705,19 @@ void idt_set_gate(uint8_t vector, void* handler, uint16_t selector, uint8_t flag
     idt[vector].reserved    = 0;
 }
 
-                                                   
+void irq_dispatcher(int irq) {
+    switch (irq) {
+        case 0:  apic_timer_handler(); break;
+        case 1:  keyboard_handle_irq(); outb(0x20, 0x20); break;
+        case 11: e1000_irq_handler(); break;
+        case 12: input_irq_dispatch(); break;
+        default: outb(0x20, 0x20); outb(0xA0, 0x20); break;
+    }
+    // EOI для PIC, если не APIC
+    if (irq >= 8) outb(0xA0, 0x20);
+    outb(0x20, 0x20);
+}      
+
 __attribute__((interrupt, target("general-regs-only"))) void irq_default_handler(void* frame) { outb(0x20, 0x20); outb(0xA0, 0x20); }
 __attribute__((interrupt, target("general-regs-only"))) void irq_timer_handler(void* frame) { outb(0x20, 0x20); }
 __attribute__((interrupt, target("general-regs-only"))) void irq_keyboard_handler(void* frame) {
@@ -22162,6 +22737,11 @@ static void irq_e1000_handler(void* frame) {
 __attribute__((interrupt, target("general-regs-only")))
 static void irq_aux_handler(void* frame) {
     input_irq_dispatch();
+}
+
+__attribute__((interrupt, target("general-regs-only")))
+void apic_timer_isr(void* frame) {
+    apic_timer_handler();
 }
 
 void idt_init(void) {
@@ -22190,8 +22770,8 @@ void idt_init(void) {
     idt_set_gate(18, exception_18_isr, 0x38, IDT_FLAG_PRESENT | IDT_FLAG_INTERRUPT);
     idt_set_gate(19, exception_19_isr, 0x38, IDT_FLAG_PRESENT | IDT_FLAG_INTERRUPT);
     
-    for (int i = 0; i < 16; i++) idt_set_gate(32 + i, irq_default_handler, 0x38, IDT_FLAG_PRESENT | IDT_FLAG_INTERRUPT);
-    idt_set_gate(IRQ0, irq_timer_handler, 0x38, IDT_FLAG_PRESENT | IDT_FLAG_INTERRUPT);
+    for (int i = 1; i < 16; i++) idt_set_gate(32 + i, irq_default_handler, 0x38, IDT_FLAG_PRESENT | IDT_FLAG_INTERRUPT);
+    idt_set_gate(IRQ0, apic_timer_isr, 0x38, IDT_FLAG_PRESENT | IDT_FLAG_INTERRUPT);
     idt_set_gate(IRQ1, irq_keyboard_handler, 0x38, IDT_FLAG_PRESENT | IDT_FLAG_INTERRUPT);
     idt_set_gate(IRQ12, irq_aux_handler, 0x38, IDT_FLAG_PRESENT | IDT_FLAG_INTERRUPT);
     idt_set_gate(IRQ11, irq_e1000_handler, 0x38, IDT_FLAG_PRESENT | IDT_FLAG_INTERRUPT);
@@ -23032,6 +23612,15 @@ void exception_handler(int vector, ExceptionContext* ctx) {
     
     printf("RIP: 0x%016X\n", ctx->frame.rip);
     printf("RSP: 0x%016X\n", ctx->frame.rsp);
+    printf("RFLAGS: 0x%016X\n", ctx->frame.rflags);
+    printf("CS: 0x%04X\n", ctx->frame.cs);
+    printf("SS: 0x%04X\n", ctx->frame.ss);
+    
+    // Показываем регистры
+    printf("RAX: 0x%016X  RBX: 0x%016X\n", ctx->rax, ctx->rbx);
+    printf("RCX: 0x%016X  RDX: 0x%016X\n", ctx->rcx, ctx->rdx);
+    printf("RSI: 0x%016X  RDI: 0x%016X\n", ctx->rsi, ctx->rdi);
+    printf("RBP: 0x%016X\n", ctx->rbp);
     
     if (vector == 14) {
         uint64_t cr2;
@@ -23048,7 +23637,7 @@ void exception_handler(int vector, ExceptionContext* ctx) {
     
     exception_active = 0;
 
-    shell_run();
+    shell_task();
 }
 
 ----- FILE: src/kernel/arch/x86_64/context.h -----
@@ -23075,6 +23664,47 @@ typedef struct {
 int context_save(Context* ctx);
 void context_restore(Context* ctx) __attribute__((noreturn));
 void context_print(Context* ctx);
+
+#endif
+
+----- FILE: src/kernel/arch/x86_64/apic_timer.h -----
+
+#ifndef APIC_TIMER_H
+#define APIC_TIMER_H
+
+#include "types.h"
+
+// ===== APIC TIMER REGISTERS =====
+#define APIC_TIMER_LVT      0x320
+#define APIC_TIMER_INITIAL  0x380
+#define APIC_TIMER_CURRENT  0x390
+#define APIC_TIMER_DIVIDE   0x3E0
+
+// ===== APIC TIMER MODES =====
+#define APIC_TIMER_ONESHOT  0x00000000
+#define APIC_TIMER_PERIODIC 0x00020000
+#define APIC_TIMER_TSC_DEADLINE 0x00040000
+
+// ===== APIC TIMER DIVIDERS =====
+#define APIC_DIV_1    0x0B
+#define APIC_DIV_2    0x00
+#define APIC_DIV_4    0x01
+#define APIC_DIV_8    0x02
+#define APIC_DIV_16   0x03
+#define APIC_DIV_32   0x08
+#define APIC_DIV_64   0x09
+#define APIC_DIV_128  0x0A
+
+// ===== VECTOR =====
+#define APIC_TIMER_VECTOR 0x20  // IRQ 0
+
+// ===== API =====
+int apic_timer_init(uint32_t frequency_hz);
+void apic_timer_start(void);
+void apic_timer_stop(void);
+uint64_t apic_timer_get_ticks(void);
+uint64_t apic_timer_get_ms(void);
+void apic_timer_sleep_ms(uint32_t ms);
 
 #endif
 
