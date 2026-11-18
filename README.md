@@ -7,7 +7,7 @@ LiveOS — экспериментальная 64-разрядная ОС для 
 Краткие команды:
 
 ```sh
-make -j2
+make
 bash user/build.sh
 make install-user-programs
 make run-kvm
