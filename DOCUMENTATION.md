@@ -270,16 +270,53 @@ GUI toolkit поддерживает label, button, textfield, panel, list, text
 
 ## Сборка и запуск для разработки
 
-Команды проекта:
+Перед сборкой надо поставить зависимости:
+
+### Сборка (ядро + ISO)
+- `x86_64-linux-gnu-gcc`, `x86_64-linux-gnu-g++`, `x86_64-linux-gnu-ld` — кросс-тулчейн
+- `nasm` — ассемблер
+- `make`, `python3`, `git` — сборка
+- `dosfstools` (`mkfs.fat`), `mtools` (`mmd`, `mcopy`), `xorriso` — FAT-образ и ISO
+- `gcc`, `uuid-dev`, `acpica-tools` (`iasl`) — сборка EFI-загрузчика (edk2)
+
+### Запуск
+- `qemu-system-x86_64`, `ovmf` (UEFI-прошивка)
+- для `make run-kvm` — доступ к `/dev/kvm` (группа `kvm`)
+
+### Тесты
+- `make test-net`, `test-zip`, `test-tls` — только нативный `gcc`, кросс не нужен
+
+### Установка (Debian/Ubuntu)
+```bash
+sudo apt install -y \
+  gcc-x86-64-linux-gnu g++-x86-64-linux-gnu binutils-x86-64-linux-gnu \
+  nasm gcc g++ make python3 git uuid-dev acpica-tools \
+  dosfstools mtools xorriso qemu-system-x86 ovmf
+```
+
+### Arch
+```bash
+sudo pacman -S --needed \
+  nasm gcc make \
+  python git util-linux \
+  dosfstools mtools xorriso \
+  qemu-full edk2-ovmf \
+  acpica
+yay -S x86_64-linux-gnu-gcc x86_64-linux-gnu-binutils
+```
+
+Команды сборки проекта:
 
 ```sh
-make -j2
+dd if=/dev/zero of=disk.img bs=4M count=16
+make
 bash user/build.sh
 make install-user-programs
 make run-kvm
 ```
 
-`make -j2` собирает kernel ELF и ISO; `bash user/build.sh` собирает пользовательские программы в `build/user/`. Это независимые результаты сборки. `make install-user-programs` запускает сборку userland и копирует ELF в `/bin` образа через loop mount, поэтому требует доступного образа и `sudo`. В текущих `Makefile` и `user/build.sh` имя образа жёстко задано как `disk.img`; если рабочий образ называется иначе (например, `disk.vdi`), команды установки и запуска нужно предварительно согласовать с ним. `make run-kvm` запускает QEMU/KVM с ISO и диском; диск не должен одновременно быть смонтирован или занят другим QEMU.
+Если нет кросс-компилятора - либо устанавливаете, либо в Makefile меняете cc и cxx на тот компилятор который у вас есть, тоже самое с ld.
+make собирает kernel ELF и ISO; для ISO требуется собранный UEFI-загрузчик EFI/edk2/Build/MyLoader/DEBUG_GCC/X64/MyLoader.efi (собирается автоматически целью $(LOADER_EFI), но требует настроенного edk2). Это независимые результаты сборки. `make install-user-programs` запускает сборку userland и копирует ELF в `/bin` образа через loop mount, поэтому требует доступного образа и `sudo`. В текущих `Makefile` и `user/build.sh` имя образа жёстко задано как `disk.img`; если рабочий образ называется иначе (например, `disk.vdi`), команды установки и запуска нужно предварительно согласовать с ним. `make run-kvm` запускает QEMU/KVM с ISO и диском; диск не должен одновременно быть смонтирован или занят другим QEMU.
 
 `make config-hive` генерирует hive из `tools/SYSTEM.ini` и записывает его в дисковый образ. `compile_commands.json` предназначен для clang tooling. Команды сборки ядра и userland не следует путать с установкой их результатов на файловый образ.
 
