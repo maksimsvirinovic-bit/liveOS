@@ -1,0 +1,21 @@
+Checks: >
+  -*,
+  clang-analyzer-core.*,
+  clang-analyzer-deadcode.*,
+  clang-analyzer-nullability.*,
+  clang-analyzer-unix.Malloc,
+  bugprone-*,
+  -bugprone-signed-bitwise,
+  -bugprone-reserved-identifier,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-implicit-widening-of-multiplication-result,
+  -bugprone-branch-clone,
+  -bugprone-switch-missing-default-case,
+  cert-*,
+  -cert-err33-c,
+  -cert-dcl37-c,
+  -cert-dcl51-cpp,
+  -performance-no-int-to-ptr
+
+WarningsAsErrors: ''
+HeaderFilterRegex: '^(include|src|kernel)/.*'
