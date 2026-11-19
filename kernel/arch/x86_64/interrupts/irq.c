@@ -134,7 +134,6 @@ void irq_unmask(uint32_t irq) {
 
 uint64_t irq_dispatch(uint32_t irq, uint64_t old_rsp) {
     if (irq >= IRQ_COUNT) {
-        pic_send_eoi(irq);
         return old_rsp;
     }
 
