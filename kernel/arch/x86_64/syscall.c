@@ -446,6 +446,10 @@ uint64_t syscall_handler(SyscallContext* ctx) {
             if (!sender || sender->pid == window_server_pid ||
                 copy_from_user(&message, (const void*)ctx->rdi, sizeof(message)) != 0 ||
                 message.payload_size > WINDOW_IPC_PAYLOAD) return (uint64_t)-1;
+            if (message.payload_size < WINDOW_IPC_PAYLOAD) {
+                memset(message.payload + message.payload_size, 0,
+                    WINDOW_IPC_PAYLOAD - message.payload_size);
+            }
             if (window_server_pid < 0) return (uint64_t)-1;
             if (window_ipc_count >= WINDOW_IPC_MAX) {
                 window_ipc_head = (window_ipc_head + 1) % WINDOW_IPC_MAX;
@@ -468,6 +472,10 @@ uint64_t syscall_handler(SyscallContext* ctx) {
                     WindowIpcSlot* slot = &window_ipc_queue[index];
                     if (slot->recipient_pid != receiver->pid) continue;
                     WindowIpcMessage message = slot->message;
+                    if (message.payload_size < WINDOW_IPC_PAYLOAD) {
+                        memset(message.payload + message.payload_size, 0,
+                               WINDOW_IPC_PAYLOAD - message.payload_size);
+                    }
                     if (copy_to_user((void*)(uintptr_t)ctx->rdi, &message, sizeof(message)) != 0) {
                         return (uint64_t)-1;
                     }
@@ -491,6 +499,10 @@ uint64_t syscall_handler(SyscallContext* ctx) {
             if (!sender || sender->pid != window_server_pid ||
                 copy_from_user(&message, (const void*)ctx->rsi, sizeof(message)) != 0 ||
                 message.payload_size > WINDOW_IPC_PAYLOAD) return (uint64_t)-1;
+            if (message.payload_size < WINDOW_IPC_PAYLOAD) {
+                memset(message.payload + message.payload_size, 0,
+                    WINDOW_IPC_PAYLOAD - message.payload_size);
+            }
             Process* client = process_get_by_pid(client_pid);
             if (!client || !client->as || window_ipc_count >= WINDOW_IPC_MAX) return (uint64_t)-1;
             uint32_t slot = (window_ipc_head + window_ipc_count) % WINDOW_IPC_MAX;
