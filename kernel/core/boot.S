@@ -17,6 +17,7 @@ _start:
     movabsq $__init_array_end, %rsi
     call run_global_ctors
 
+    movabsq $0x5000, %rdi
     movabsq $kmain, %rax
     call *%rax
 

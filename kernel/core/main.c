@@ -161,12 +161,11 @@ static void init_input(void) {
     }
 }
 
-noreturn void kmain(void) {
+noreturn void kmain(BOOT_INFO* bi) {
     serial_emergency_init();
     serial_set_debug_enabled(1);
+    if (!bi) { serial_force_print("kmain: no BOOT_INFO\n"); for(;;) __asm__ volatile("cli; hlt"); }
     serial_emergency_print("Kernel reached kmain (higher-half)\n");
-
-    BOOT_INFO* bi = (BOOT_INFO*)0x5000;
 
     init_drivers();
     init_cpu();
