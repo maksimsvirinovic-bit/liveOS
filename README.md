@@ -39,7 +39,7 @@ sudo pacman -S --needed \
 yay -S x86_64-linux-gnu-gcc x86_64-linux-gnu-binutils
 ```
 
-Краткие команды:
+Команды сборки:
 
 ```sh
 dd if=/dev/zero of=disk.img bs=4M count=16
