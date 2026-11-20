@@ -80,6 +80,19 @@ int fat32_mount(BlockDevice* dev, FileSystem** out) {
         return -1;
     }
 
+    uint64_t fat_end = (uint64_t)bs->reserved_sectors +
+                       (uint64_t)bs->num_fats * bs->fat_size_32;
+    if (fat_end > data_start) {
+        serial_emergency_print("fat32: FAT area overlaps data area\n");
+        bcache_release((uint8_t*)block);
+        return -1;
+    }
+    if (fat_end > total_sectors) {
+        serial_emergency_print("fat32: FAT area past end of volume\n");
+        bcache_release((uint8_t*)block);
+        return -1;
+    }
+
     Fat32* fs = (Fat32*)kzalloc(sizeof(Fat32));
     if (!fs) { bcache_release((uint8_t*)block); return -1; }
 
