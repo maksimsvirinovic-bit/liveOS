@@ -5,6 +5,7 @@
 *.log
 *.EFI
 *.vdi
+compile_commands.json
 build/*
 EFI/edk2/*
 build/kernel/core/boot.o
