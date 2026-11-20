@@ -22,7 +22,7 @@ CFLAGS = -m64 -ffreestanding -nostdlib \
 		 -Ikernel/arch -Ikernel/devices -Ikernel/filesystems \
 		 -Ikernel/elf_loader -Ikernel/core -Ikernel/graphics
 
-CFLAGS += -DDEBUG
+#CFLAGS += -DDEBUG
 
 CXXFLAGS = -m64 -ffreestanding -nostdlib++ \
 		   -fno-exceptions -fno-rtti -fno-threadsafe-statics \
