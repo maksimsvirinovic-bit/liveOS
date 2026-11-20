@@ -121,6 +121,12 @@ static struct {
     uint32_t receive_length;
 } g_tcp;
 
+static uint32_t tcp_isn(void) {
+    uint64_t tsc;
+    __asm__ volatile("rdtsc" : "=A"(tsc));
+    return (uint32_t)(tsc ^ (uintptr_t)&g_tcp ^ pit_get_tick());
+}
+
 static void zero_bytes(void* memory, uint32_t size) {
     uint8_t* bytes = (uint8_t*)memory;
     for (uint32_t i = 0; i < size; i++) bytes[i] = 0;
@@ -338,7 +344,7 @@ int net_tcp_connect(uint32_t address, uint16_t port, uint32_t timeout_ticks) {
     g_tcp.remote_address = address;
     g_tcp.remote_port = port;
     g_tcp.local_port = (uint16_t)(49152 + (pit_get_tick() % 16384));
-    g_tcp.send_sequence = (pit_get_tick() << 12) ^ address ^ port;
+    g_tcp.send_sequence = tcp_isn();
     g_tcp.initial_sequence = g_tcp.send_sequence;
     g_tcp.state = TCP_STATE_SYN_SENT;
 
