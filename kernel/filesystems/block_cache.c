@@ -18,6 +18,14 @@ static inline int hash_slot(uint64_t lba) {
     return (int)((lba * 2654435761ULL) % BCACHE_ENTRIES);
 }
 
+static inline uint64_t bcache_irq_save(void) {
+    uint64_t f; __asm__ volatile("pushfq; popq %0; cli" : "=r"(f) :: "memory");
+    return f;
+}
+static inline void bcache_irq_restore(uint64_t f) {
+    if (f & (1u << 9)) __asm__ volatile("sti" ::: "memory");
+}
+
 void bcache_init(void) {
     for (int i = 0; i < BCACHE_ENTRIES; i++) {
         g_cache[i].dev = NULL;
@@ -95,6 +103,7 @@ const uint8_t* bcache_get(BlockDevice* dev, uint64_t lba) {
     serial_emergency_print_hex(lba);
     serial_emergency_print("\n");
     #endif
+    uint64_t f = bcache_irq_save();
 
     BCacheEntry* e = find_entry(dev, lba);
     if (e) {
@@ -103,6 +112,7 @@ const uint8_t* bcache_get(BlockDevice* dev, uint64_t lba) {
         #endif
         e->pins++;
         g_hits++;
+        bcache_irq_restore(f);
         return e->data;
     }
     #ifdef DEBUG
@@ -113,6 +123,7 @@ const uint8_t* bcache_get(BlockDevice* dev, uint64_t lba) {
         #ifdef DEBUG
         serial_emergency_print("  → alloc_entry FAILED\n");
         #endif
+        bcache_irq_restore(f);
         return NULL;
     }
     #ifdef DEBUG
@@ -125,6 +136,7 @@ const uint8_t* bcache_get(BlockDevice* dev, uint64_t lba) {
         #ifdef DEBUG
         serial_emergency_print("  → load_entry FAILED\n");
         #endif
+        bcache_irq_restore(f);
         return NULL;
     }
     
@@ -139,10 +151,12 @@ const uint8_t* bcache_get(BlockDevice* dev, uint64_t lba) {
     #endif
 
     e->pins = 1;
+    bcache_irq_restore(f);
     return e->data;
 }
 
 uint8_t* bcache_get_for_write(BlockDevice* dev, uint64_t lba) {
+    uint64_t f = bcache_irq_save();
     BCacheEntry* e = find_entry(dev, lba);
     if (e) {
         e->pins++;
@@ -158,39 +172,51 @@ uint8_t* bcache_get_for_write(BlockDevice* dev, uint64_t lba) {
     if (load_entry(e, dev, lba) != 0) return NULL;
     e->pins = 1;
     e->dirty = 1;
+    bcache_irq_restore(f);
     return e->data;
 }
 
 void bcache_release(const uint8_t* block) {
+    uint64_t f = bcache_irq_save();
     for (int i = 0; i < BCACHE_ENTRIES; i++) {
         if (g_cache[i].data == block) {
             if (g_cache[i].pins > 0) g_cache[i].pins--;
             return;
         }
     }
+    bcache_irq_restore(f);
 }
 
 int bcache_flush(BlockDevice* dev) {
     if (!dev || !dev->write) return -1;
+    uint64_t f = bcache_irq_save();
     int n = 0;
     for (int i = 0; i < BCACHE_ENTRIES; i++) {
         BCacheEntry* e = &g_cache[i];
         if (e->dev != dev || !e->dirty) continue;
-        if (dev->write(dev, e->lba, 1, e->data) != 0) return -1;
+        if (dev->write(dev, e->lba, 1, e->data) != 0) { 
+            bcache_irq_restore(f);
+            return -1;
+        }
         g_writes++;
         n++;
     }
 
-    if (n > 0 && dev->flush && dev->flush(dev) != 0) return -1;
+    if (n > 0 && dev->flush && dev->flush(dev) != 0) { 
+        bcache_irq_restore(f);
+        return -1;
+    }
 
     for (int i = 0; i < BCACHE_ENTRIES; i++) {
         BCacheEntry* e = &g_cache[i];
         if (e->dev == dev) e->dirty = 0;
     }
+    bcache_irq_restore(f);
     return n;
 }
 
 void bcache_sync(BlockDevice* dev) {
+    uint64_t f = bcache_irq_save();
     bcache_flush(dev);
     for (int i = 0; i < BCACHE_ENTRIES; i++) {
         if (g_cache[i].dev == dev && g_cache[i].pins == 0) {
@@ -199,6 +225,7 @@ void bcache_sync(BlockDevice* dev) {
             g_cache[i].dirty = 0;
         }
     }
+    bcache_irq_restore(f);
 }
 
 void bcache_stats(void) {
