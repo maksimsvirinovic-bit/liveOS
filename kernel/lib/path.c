@@ -2,6 +2,7 @@
 #include "str.h"
 int path_normalize(const char* cwd, const char* input, char* out, uint32_t out_size) {
     if (!input || !out || out_size == 0) return -1;
+    if (!cwd) cwd = "/";
     char full[512];
     if (input[0] == '/') {
         strncpy(full, input, sizeof(full) - 1);
@@ -14,7 +15,9 @@ int path_normalize(const char* cwd, const char* input, char* out, uint32_t out_s
             full[len++] = '/';
             full[len] = '\0';
         }
-        strncat(full, input, sizeof(full) - len - 1);
+        uint32_t remaining = (len < (int)sizeof(full)) ? (uint32_t)(sizeof(full) - len - 1) : 0;
+        if (remaining == 0) return -1;
+        strncat(full, input, remaining);
     }
     const char* components[128];
     int comp_count = 0;
