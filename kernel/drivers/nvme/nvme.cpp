@@ -367,6 +367,14 @@ int Controller::read(uint64_t lba, uint32_t count, void* buf) {
     cmd.cdw11 = (uint32_t)(lba >> 32);
     cmd.cdw12 = (count - 1) & 0xFFFF;
 
+    uint64_t first_off = buf_phys & (kPageSize - 1);
+    if (first_off + bytes > kPageSize) {
+        uint64_t second_virt = ((uint64_t)buf & ~(kPageSize - 1)) + kPageSize;
+        uint64_t second_phys = virt_to_phys((void*)second_virt);
+        if (!second_phys) return -1;
+        cmd.prp2 = second_phys;
+    }
+
     return io_cmd(cmd);
 }
 
@@ -391,6 +399,15 @@ int Controller::write(uint64_t lba, uint32_t count, const void* buf) {
     cmd.cdw10 = (uint32_t)lba;
     cmd.cdw11 = (uint32_t)(lba >> 32);
     cmd.cdw12 = (count - 1) & 0xFFFF;
+
+
+    uint64_t first_off = buf_phys & (kPageSize - 1);
+    if (first_off + bytes > kPageSize) {
+        uint64_t second_virt = ((uint64_t)buf & ~(kPageSize - 1)) + kPageSize;
+        uint64_t second_phys = virt_to_phys((void*)second_virt);
+        if (!second_phys) return -1;
+        cmd.prp2 = second_phys;
+    }
 
     return io_cmd(cmd);
 }
