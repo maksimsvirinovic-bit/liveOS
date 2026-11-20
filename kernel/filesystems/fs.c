@@ -75,6 +75,8 @@ int fs_umount(FileSystem* fs) {
 }
 
 FileSystem* fs_find_by_path(const char* path) {
+    // TODO: исправить проблему с выдачей файловой системы
+    // которая вешает regfs.
     FileSystem* best = NULL;
     size_t best_len = 0;
     for (FileSystem* fs = g_mounts; fs; fs = fs->next) {

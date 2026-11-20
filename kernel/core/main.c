@@ -103,8 +103,7 @@ static BlockDevice* rootfs_init(void) {
         config_load();
         config_dump();
     } else {
-        printf("regfs: mount failed. System loaded with defaults. All changes will be lost on shutdown!\n");
-        config_defaults();
+        panic("regfs mount failed!\n");
     }
     return dev;
 }
