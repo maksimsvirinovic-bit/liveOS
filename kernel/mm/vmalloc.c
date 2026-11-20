@@ -4,11 +4,14 @@
 #include "heap.h"
 #include <serial/serial.h>
 #include <stddef.h>
+#include <stdint.h>
+#include <stdbool.h>
 
 typedef struct VmallocRegion {
     uint64_t start;
     uint64_t end;
     int      free;
+    bool     is_mmio;
     struct VmallocRegion* next;
 } VmallocRegion;
 
@@ -21,6 +24,7 @@ static VmallocRegion* region_alloc(uint64_t start, uint64_t end, int free_flag) 
     r->start = start;
     r->end = end;
     r->free = free_flag;
+    r->is_mmio = false;
     r->next = NULL;
     return r;
 }
@@ -67,6 +71,24 @@ void vmalloc_init(void) {
 static uint64_t align_up(uint64_t v, uint64_t a) {
     return (v + a - 1) & ~(a - 1);
 }
+
+uint64_t vmalloc_reserve_mmio(uint64_t size) {
+    uint64_t f = vmalloc_irq_save();
+    uint64_t virt = vmalloc_reserve(size);
+    if (!virt){
+        vmalloc_irq_restore(f);
+        return 0;
+    }
+    for (VmallocRegion* r = g_regions; r; r = r->next) {
+        if (r->start == virt && !r->free) {
+            r->is_mmio = true;
+            break;
+        }
+    }
+    vmalloc_irq_restore(f);
+    return virt;
+}
+
 
 uint64_t vmalloc_reserve(uint64_t size) {
     if (size == 0) return 0;
@@ -155,7 +177,9 @@ void vfree(void* ptr) {
         uint64_t phys = paging_get_phys(paging_kernel_pml4_phys(), v);
         if (phys) {
             paging_unmap_4k(paging_kernel_pml4_phys(), v);
+            if (!r->is_mmio) {
             pmm_free_page(phys);
+            }
         }
     }
 

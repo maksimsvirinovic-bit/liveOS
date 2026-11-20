@@ -16,7 +16,7 @@ int fb_init(const BOOT_INFO* bi) {
     uint64_t fb_phys_base = bi->FbAddr & ~(PAGE_SIZE - 1);
     uint64_t map_size = (fb_offset + fb_size + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
     uint64_t fb_pages = map_size / PAGE_SIZE;
-    uint64_t map_virt = vmalloc_reserve(map_size);
+    uint64_t map_virt = vmalloc_reserve_mmio(map_size);
     if (!map_virt) return -1;
 
     for (uint64_t i = 0; i < fb_pages; i++) {

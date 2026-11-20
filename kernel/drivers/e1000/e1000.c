@@ -129,7 +129,7 @@ static int map_mmio(uint64_t physical, uint64_t size) {
     uint64_t page_start = physical & ~(PAGE_SIZE - 1);
     uint64_t page_offset = physical - page_start;
     uint64_t map_size = (size + page_offset + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
-    uint64_t virtual_start = vmalloc_reserve(map_size);
+    uint64_t virtual_start = vmalloc_reserve_mmio(map_size);
     if (!virtual_start) return -1;
 
     for (uint64_t offset = 0; offset < map_size; offset += PAGE_SIZE) {

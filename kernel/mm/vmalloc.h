@@ -16,6 +16,7 @@ extern "C" {
 void vmalloc_init(void);
 
 uint64_t vmalloc_reserve(uint64_t size);
+uint64_t vmalloc_reserve_mmio(uint64_t size);
 
 void* vmalloc_page(void);
 

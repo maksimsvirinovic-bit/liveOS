@@ -261,7 +261,7 @@ int Controller::init() {
 
     pci_enable_bus_master(entry);
 
-    uint64_t mmio_virt = vmalloc_reserve(bar0_size_);
+    uint64_t mmio_virt = vmalloc_reserve_mmio(bar0_size_);
     if (!mmio_virt) return -1;
 
     for (uint64_t off = 0; off < bar0_size_; off += kPageSize) {
