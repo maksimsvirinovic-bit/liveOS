@@ -86,10 +86,12 @@ int Controller::enable() {
 }
 
 int Controller::admin_cmd(Cmd& cmd) {
+    spin_lock_irqsave(&admin_lock);
     uint16_t head = admin_sq_head_;
     uint16_t tail = admin_sq_tail_;
 
     if (((tail + 1) & (kAdminQueueDepth - 1)) == head) {
+        spin_unlock_irqrestore(&admin_lock);
         serial_emergency_print("nvme: admin sq full\n");
         return -1;
     }
@@ -115,14 +117,17 @@ int Controller::admin_cmd(Cmd& cmd) {
 
             uint16_t sc = (status >> 1) & 0xFF;
             if (sc != 0) {
+                spin_unlock_irqrestore(&admin_lock);
                 serial_emergency_print("nvme: admin sc=");
                 serial_emergency_print_hex(sc);
                 serial_emergency_print("\n");
                 return -1;
             }
+            spin_unlock_irqrestore(&admin_lock);
             return 0;
         }
     }
+    spin_unlock_irqrestore(&admin_lock);
     serial_emergency_print("nvme: admin timeout\n");
     return -1;
 }
@@ -174,10 +179,12 @@ int Controller::create_io_sq() {
 }
 
 int Controller::io_cmd(Cmd& cmd) {
+    spin_lock_irqsave(&io_lock);
     uint16_t head = io_sq_head_;
     uint16_t tail = io_sq_tail_;
 
     if (((tail + 1) & (kIoQueueDepth - 1)) == head) {
+        spin_unlock_irqrestore(&io_lock);
         serial_emergency_print("nvme: io sq full\n");
         return -1;
     }
@@ -200,6 +207,7 @@ int Controller::io_cmd(Cmd& cmd) {
         if ((status & 1) == io_cq_phase_) {
             uint16_t completed_sq_head = cq[cq_idx].sq_head;
             if (completed_sq_head >= kIoQueueDepth) {
+                spin_unlock_irqrestore(&io_lock);
                 serial_emergency_print("nvme: invalid io sq head\n");
                 return -1;
             }
@@ -211,14 +219,17 @@ int Controller::io_cmd(Cmd& cmd) {
 
             uint16_t sc = (status >> 1) & 0xFF;
             if (sc != 0) {
+                spin_unlock_irqrestore(&io_lock);
                 serial_emergency_print("nvme: io sc=");
                 serial_emergency_print_hex(sc);
                 serial_emergency_print("\n");
                 return -1;
             }
+            spin_unlock_irqrestore(&io_lock);
             return 0;
         }
     }
+    spin_unlock_irqrestore(&io_lock);
     serial_emergency_print("nvme: io timeout\n");
     return -1;
 }

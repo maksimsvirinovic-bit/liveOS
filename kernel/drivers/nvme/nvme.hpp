@@ -1,6 +1,7 @@
 #ifndef NVME_HPP
 #define NVME_HPP
 
+#include "spinlock.h"
 #include <stdint.h>
 
 namespace nvme {
@@ -124,6 +125,10 @@ private:
     uint32_t sector_size_ = 0;
     uint64_t sector_count_ = 0;
     uint16_t queue_depth_ = 0;
+
+    spinlock_t admin_lock;
+    spinlock_t io_lock;
+    
 
     uint32_t rd32(uint32_t off);
     uint64_t rd64(uint32_t off);
