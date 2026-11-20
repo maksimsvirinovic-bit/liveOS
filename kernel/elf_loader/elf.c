@@ -85,6 +85,20 @@ static int elf_load_segments(const uint8_t* data, uint64_t size,
             ((ph[i].p_flags & (PF_W | PF_X)) == (PF_W | PF_X))) return -1;
 
         if (ph[i].p_memsz == 0) continue;
+        if (ph[i].p_align && (ph[i].p_align & (ph[i].p_align - 1))) return -1;
+        if ((ph[i].p_vaddr & (PAGE_SIZE - 1)) != (ph[i].p_offset & (PAGE_SIZE - 1))) return -1;
+
+        uint64_t vstart_i = ph[i].p_vaddr & ~(PAGE_SIZE - 1);
+        uint64_t vend_i   = (ph[i].p_vaddr + ph[i].p_memsz + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+        for (uint16_t j = 0; j < i; j++) {
+            if (ph[j].p_type != PT_LOAD || ph[j].p_memsz == 0) continue;
+            uint64_t vstart_j = ph[j].p_vaddr & ~(PAGE_SIZE - 1);
+            uint64_t vend_j   = (ph[j].p_vaddr + ph[j].p_memsz + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+            if (vstart_j < vend_i && vstart_i < vend_j) {
+                if ((ph[j].p_flags & PF_W) && (ph[i].p_flags & PF_X)) return -1;
+                if ((ph[i].p_flags & PF_W) && (ph[j].p_flags & PF_X)) return -1;
+            }
+        }
 
         uint64_t vstart = ph[i].p_vaddr & ~(PAGE_SIZE - 1);
         uint64_t vend   = (ph[i].p_vaddr + ph[i].p_memsz + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
