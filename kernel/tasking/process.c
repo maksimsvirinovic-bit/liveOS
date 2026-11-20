@@ -77,6 +77,7 @@ static uint64_t build_user_stack(AddressSpace* as, char** argv, char** envp) {
     for (int i = envc - 1; i >= 0; i--) {
         int len = strlen(envp[i]) + 1;
         rsp -= len;
+        if (rsp < USER_STACK_LIMIT + 256) return 0;
         uint64_t phys = paging_get_phys(as->pml4_phys, rsp);
         if (!phys) return 0;
         memcpy(phys_to_virt(phys + (rsp & 0xFFF)), envp[i], len);
@@ -85,6 +86,7 @@ static uint64_t build_user_stack(AddressSpace* as, char** argv, char** envp) {
     for (int i = argc - 1; i >= 0; i--) {
         int len = strlen(argv[i]) + 1;
         rsp -= len;
+        if (rsp < USER_STACK_LIMIT + 256) return 0;
         uint64_t phys = paging_get_phys(as->pml4_phys, rsp);
         if (!phys) return 0;
         memcpy(phys_to_virt(phys + (rsp & 0xFFF)), argv[i], len);
@@ -93,18 +95,22 @@ static uint64_t build_user_stack(AddressSpace* as, char** argv, char** envp) {
 
     rsp &= ~0xFULL;
     rsp -= 8;
+    if (rsp < USER_STACK_LIMIT + 256) return 0;
     *(uint64_t*)(phys_to_virt(paging_get_phys(as->pml4_phys, rsp) + (rsp & 0xFFF))) = 0;
     for (int i = envc - 1; i >= 0; i--) {
         rsp -= 8;
+        if (rsp < USER_STACK_LIMIT + 256) return 0;
         *(uint64_t*)(phys_to_virt(paging_get_phys(as->pml4_phys, rsp) + (rsp & 0xFFF))) = envp_addrs[i];
     }
     rsp -= 8;
     *(uint64_t*)(phys_to_virt(paging_get_phys(as->pml4_phys, rsp) + (rsp & 0xFFF))) = 0;
     for (int i = argc - 1; i >= 0; i--) {
         rsp -= 8;
+        if (rsp < USER_STACK_LIMIT + 256) return 0;
         *(uint64_t*)(phys_to_virt(paging_get_phys(as->pml4_phys, rsp) + (rsp & 0xFFF))) = argv_addrs[i];
     }
     rsp -= 8;
+    if (rsp < USER_STACK_LIMIT + 256) return 0;
     *(uint64_t*)(phys_to_virt(paging_get_phys(as->pml4_phys, rsp) + (rsp & 0xFFF))) = (uint64_t)argc;
 
     return rsp;
