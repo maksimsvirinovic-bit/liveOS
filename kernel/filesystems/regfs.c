@@ -122,6 +122,7 @@ void regfs_umount(FileSystem* fs) {
     kfree(rfs);
     fs->private = NULL;
 }
+
 RegNode* regfs_find_key(RegNode* root, const char* path) {
     if (!root || !path) return NULL;
     RegNode* cur = root;
