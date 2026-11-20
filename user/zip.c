@@ -49,8 +49,9 @@ typedef struct {
 } HuffmanTable;
 
 static int inflate_bits(InflateState* state, uint32_t count, uint32_t* value) {
-    if (count > 16 || state->bit_position > state->input_size * 8u ||
-        count > state->input_size * 8u - state->bit_position) return -1;
+    uint64_t total_bits = (uint64_t)state->input_size * 8;
+    if (count > 16 || (uint64_t)state->bit_position > total_bits ||
+        count > total_bits - state->bit_position) return -1;
     uint32_t result = 0;
     for (uint32_t bit = 0; bit < count; bit++) {
         uint32_t position = state->bit_position++;
@@ -400,6 +401,7 @@ int zip_open(ZipArchive* archive, const void* bytes, uint32_t size) {
         uint16_t start_disk = read16(data + cursor + 34);
         uint32_t local_offset = read32(data + cursor + 42);
         uint32_t record_length = 46u + name_length + extra_length + comment_length;
+        if (compressed_size > ZIP_MAX_ENTRY_SIZE) return -1;
         if (!range_valid(cursor, record_length, central_end) || start_disk != 0 ||
             (flags & (ZIP_FLAG_ENCRYPTED | ZIP_FLAG_DATA_DESCRIPTOR)) ||
             (method != ZIP_METHOD_STORE && method != ZIP_METHOD_DEFLATE) ||
