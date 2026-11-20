@@ -152,6 +152,10 @@ uint32_t fat32_next_cluster(Fat32* fs, uint32_t cluster) {
     if (!fs || cluster < 2 || cluster >= fs->total_clusters + 2) return FAT32_CLUSTER_EOC;
     uint64_t byte_offset = (uint64_t)cluster * 4;
     uint64_t sector = fs->fat_start_lba + (byte_offset / fs->bytes_per_sector);
+    if (sector >= fs->dev->sector_count) {
+        serial_emergency_print("fat32: FAT sector out of range\n");
+        return FAT32_CLUSTER_EOC;
+    }
     uint64_t offset = byte_offset % fs->bytes_per_sector;
 
     const uint8_t* block = bcache_get(fs->dev, sector);
@@ -167,6 +171,10 @@ int fat32_set_cluster(Fat32* fs, uint32_t cluster, uint32_t value) {
         value > FAT32_CLUSTER_MASK) return -1;
     uint64_t byte_offset = (uint64_t)cluster * 4;
     uint64_t sector = fs->fat_start_lba + (byte_offset / fs->bytes_per_sector);
+    if (sector >= fs->dev->sector_count) {
+        serial_emergency_print("fat32: FAT sector out of range\n");
+        return -1;
+    }
     uint64_t offset = byte_offset % fs->bytes_per_sector;
 
     uint8_t* block = bcache_get_for_write(fs->dev, sector);
