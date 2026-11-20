@@ -136,6 +136,7 @@ static int map_mmio(uint64_t physical, uint64_t size) {
         if (paging_map_4k(paging_kernel_pml4_phys(), page_start + offset,
                           virtual_start + offset,
                           PAGE_PRESENT | PAGE_WRITE | PAGE_NOCACHE) != 0) {
+            vfree((void*)(uintptr_t)virtual_start);
             return -1;
         }
     }
