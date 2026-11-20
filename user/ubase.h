@@ -5,17 +5,24 @@
 
 #define NULL ((void*)0)
 
-static int strlen_(const char* s) { int n = 0; while (s[n]) n++; return n; }
-static int strcmp_(const char* a, const char* b) {
+static inline int strlen_(const char* s) {
+    if (s == NULL) return -1;
+    int n = 0;
+    while (s[n]) n++;
+    return n;
+}
+static inline int strcmp_(const char* a, const char* b) {
+    if (a == NULL || b == NULL) return -1;
     while (*a && *a == *b) { a++; b++; }
     return (unsigned char)*a - (unsigned char)*b;
 }
-static void strcpy_(char* d, const char* s) {
+static inline void strcpy_(char* d, const char* s) {
+    if (d == NULL || s == NULL) return;
     while ((*d++ = *s++)) {}
 }
 
-static void print(const char* s) { sys_write(1, s, strlen_(s)); }
-static void print_int(int value) {
+static inline void print(const char* s) { sys_write(1, s, strlen_(s)); }
+static inline void print_int(int value) {
     char digits[12];
     int count = 0;
     unsigned int number;
