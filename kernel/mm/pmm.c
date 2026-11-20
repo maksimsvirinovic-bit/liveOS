@@ -4,6 +4,7 @@
 #include <str.h>
 
 #define PMM_BITMAP_MAX_BYTES (1024 * 1024)
+#define PMM_MAX_TRACKED_PAGES  65536u
 
 static uint8_t  g_bitmap[PMM_BITMAP_MAX_BYTES] __attribute__((aligned(4096)));
 static uint8_t* bitmap       = NULL;
@@ -82,6 +83,12 @@ void pmm_init(const BOOT_INFO* info) {
     }
 
     total_pages = max_phys / PAGE_SIZE;
+    if (total_pages > PMM_MAX_TRACKED_PAGES) {
+        serial_emergency_print("PMM: RAM exceeds refcount tracking, clamping to ");
+        serial_emergency_print_hex((uint64_t)PMM_MAX_TRACKED_PAGES * PAGE_SIZE / (1024*1024));
+        serial_emergency_print(" MiB\n");
+        total_pages = PMM_MAX_TRACKED_PAGES;
+    }
     bitmap_bytes = (total_pages + 7) / 8;
 
     if (bitmap_bytes > PMM_BITMAP_MAX_BYTES) {
