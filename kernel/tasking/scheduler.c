@@ -56,6 +56,7 @@ void scheduler_add(Process* p) {
     if (p->vruntime == 0) {
         p->vruntime = g_min_vruntime;
     }
+    p->last_run = g_tick_counter;
     p->run_next = g_ready_queue;
     g_ready_queue = p;
     if (p->vruntime < g_min_vruntime) {
