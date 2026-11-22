@@ -858,6 +858,11 @@ uint64_t syscall_handler(SyscallContext* ctx) {
             if (copy_user_path(p, (const char*)ctx->rdi, kpath) != 0) return (uint64_t)-1;
             return (uint64_t)fs_mkdir(kpath);
         }
+        case SYS_SPIN: {
+            uint64_t tick = 0;
+            __asm__ volatile("rdtsc" : "=A"(tick));
+            return tick;
+        }
         default:
             serial_emergency_print("[syscall] unknown: ");
             serial_emergency_print_hex(num);
