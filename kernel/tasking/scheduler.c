@@ -44,6 +44,7 @@ void scheduler_init(void) {
     if (g_idle) {
         g_idle->pid = 0;
         g_idle->vruntime = 0;
+        g_idle->preemptible = 1;
         g_idle->weight = NICE_0_WEIGHT;
         process_setup_initial_frame(g_idle, (uint64_t)idle_loop,
                                       g_idle->kstack_top, 0x08, 0x10, 0x202);
