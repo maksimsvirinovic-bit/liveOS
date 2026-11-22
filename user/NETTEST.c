@@ -1,5 +1,4 @@
 #include "sys.h"
-#include "ubase.h"
 
 static int parse_ipv4(const char* text, uint32_t* address) {
     uint32_t octets[4] = {0, 0, 0, 0};

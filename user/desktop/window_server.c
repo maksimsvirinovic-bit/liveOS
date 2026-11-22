@@ -1,6 +1,5 @@
 #include "window_server.h"
 #include <stddef.h>
-#include "../ubase.h"
 
 static int gui_window_group_find(GuiDesktop* desktop, const char* name) {
     if (!desktop || !name) return -1;

@@ -1,5 +1,4 @@
 #include "sys.h"
-#include "ubase.h"
 
 static void resolve_cmd(const char* name, char* out) {
     int has_extension = 0;

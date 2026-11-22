@@ -1,5 +1,4 @@
 #include "sys.h"
-#include "ubase.h"
 
 static void resolve_cmd(const char* name, char* out) {
     if (name[0] == '/' || name[0] == '.') {

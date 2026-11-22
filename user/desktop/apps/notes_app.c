@@ -1,6 +1,5 @@
 #include "../../sys.h"
 #include "../gui.h"
-#include "../../ubase.h"
 
 #define TEXT_MAX 900
 
