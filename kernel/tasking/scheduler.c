@@ -204,3 +204,20 @@ void scheduler_start(void) {
     irq_return(first->saved_rsp);
     __builtin_unreachable();
 }
+
+void scheduler_sleep(void) {
+    Process* current = process_get_current();
+    if (!current || current == g_idle) return;
+    current->state = PROC_SLEEPING;
+    scheduler_remove(current);
+    scheduler_yield();   
+}
+
+void scheduler_wakeup(Process* p) {
+    if (!p) return;
+    if (p->state != PROC_SLEEPING) {
+        return;
+    }
+    p->state = PROC_READY;
+    scheduler_add(p);
+}

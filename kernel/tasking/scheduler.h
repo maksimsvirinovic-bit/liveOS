@@ -12,5 +12,7 @@ void      scheduler_remove(Process* p);
 void      scheduler_exit_current(void);
 void      scheduler_yield(void);
 Process*  scheduler_pick_next(void);
+void      scheduler_sleep(void);
+void      scheduler_wakeup(Process* p);
 
 #endif
