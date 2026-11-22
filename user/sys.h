@@ -2,6 +2,7 @@
 #define USER_SYS_H
 
 #include <stdint.h>
+#include <stddef.h>
 
 #define SYS_CON_WRITE  1
 #define SYS_READ    10
@@ -43,6 +44,7 @@
 #define SYS_REG_SET_STR 253
 #define SYS_REG_ENUM 254
 #define SYS_TICKS 255
+#define SYS_SPIN 256
 #define SYS_WINDOW_POST 260
 #define SYS_WINDOW_RECV 261
 #define SYS_WINDOW_REPLY 262
@@ -216,6 +218,11 @@ static inline void* memcpy(void* dst, const void* src, uint32_t n) {
     for (uint32_t i = 0; i < n; i++) d[i] = s[i];
     return dst;
 }
+
+extern void* malloc(size_t size);
+extern void  free(void* ptr);
+extern void* calloc(size_t n, size_t size);
+extern void* realloc(void* ptr, size_t size);
 
 static inline int sys_window_post(const UserWindowMessage* message);
 static inline int sys_window_recv(UserWindowMessage* message);
@@ -493,6 +500,9 @@ static inline int sys_window_recv(UserWindowMessage* message) {
 }
 static inline int sys_window_reply(int client_pid, const UserWindowMessage* message) {
     return (int)syscall2(SYS_WINDOW_REPLY, (uint64_t)client_pid, (uint64_t)message);
+}
+static inline uint64_t sys_spin(void) {
+    return syscall0(SYS_SPIN);
 }
 static inline int sys_window_register(void) {
     return (int)syscall0(SYS_WINDOW_REGISTER);
