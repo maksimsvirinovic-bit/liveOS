@@ -78,12 +78,8 @@ static uint64_t align_up(uint64_t v, uint64_t a) {
 }
 
 uint64_t vmalloc_reserve_mmio(uint64_t size) {
-    spinlock_t* sl = kmalloc(sizeof(spinlock_t));
-    spin_lock_irqsave(sl);
     uint64_t virt = vmalloc_reserve(size);
     if (!virt){
-        spin_unlock_irqrestore(sl);
-        kfree(sl);
         return 0;
     }
     for (VmallocRegion* r = g_regions; r; r = r->next) {
@@ -92,16 +88,11 @@ uint64_t vmalloc_reserve_mmio(uint64_t size) {
             break;
         }
     }
-    spin_unlock_irqrestore(sl);
-    kfree(sl);
     return virt;
 }
 
-
 uint64_t vmalloc_reserve(uint64_t size) {
     if (size == 0) return 0;
-    spinlock_t* sl = kmalloc(sizeof(spinlock_t));
-    spin_lock_irqsave(sl);
     size = align_up(size, PAGE_SIZE);
 
     for (VmallocRegion* r = g_regions; r; r = r->next) {
@@ -115,8 +106,6 @@ uint64_t vmalloc_reserve(uint64_t size) {
         } else {
             VmallocRegion* used = region_alloc(result, result + size, 0);
             if (!used) {
-                spin_unlock_irqrestore(sl);
-                kfree(sl);
                 return 0;
             }
             r->start = result + size;
@@ -127,13 +116,9 @@ uint64_t vmalloc_reserve(uint64_t size) {
         }
 
         g_vmalloc_used += size;
-        spin_unlock_irqrestore(sl);
-        kfree(sl);
         return result;
     }
 
-    spin_unlock_irqrestore(sl);
-    kfree(sl);
     serial_emergency_print("vmalloc: out of virtual space\n");
     return 0;
 }
@@ -171,12 +156,8 @@ void* vmalloc_page(void) {
 }
 
 uint64_t vmalloc_kernel_stack(void) {
-    spinlock_t* sl = kmalloc(sizeof(spinlock_t));
-    spin_lock_irqsave(sl);
     uint64_t phys = pmm_alloc_pages((uint32_t)(KERNEL_STACK_SIZE / PAGE_SIZE));
     if (!phys){
-        spin_unlock_irqrestore(sl);
-        kfree(sl);
         return 0;
     }
     uint64_t base = (uint64_t)(uintptr_t)phys_to_virt(phys);
