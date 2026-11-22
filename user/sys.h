@@ -243,16 +243,11 @@ static inline void user_window_set_text(UserWindowMessage* message, const char* 
 
 static inline int sys_window_request_sync(UserWindowMessage* request, UserWindowMessage* response) {
     if (!request || !response || sys_window_post(request) != 0) return -1;
-    for (uint32_t i = 0; i < 200000; i++) {
-        if (sys_window_recv(response) == 0) {
-            if (response->type == request->type && response->result == 0 &&
-                (request->type != USER_WINDOW_MSG_CREATE || response->window_id >= 0)) {
-                return 0;
-            }
-        }
-        sys_yield();
-    }
-    return -1;
+    if (sys_window_recv(response) != 0) return -1;
+    if (response->type != request->type) return -1;
+    if (request->type == USER_WINDOW_MSG_CREATE && response->window_id < 0) return -1;
+
+    return 0;
 }
 
 static inline int sys_window_create(const char* title, int x, int y, int width, int height) {
