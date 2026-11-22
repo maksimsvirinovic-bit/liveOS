@@ -226,6 +226,10 @@ int process_count(void) {
     return n;
 }
 
+Process* process_first(void) {
+    return g_processes;
+}
+
 int sys_getpid_impl(void) {
     return g_current ? g_current->pid : -1;
 }

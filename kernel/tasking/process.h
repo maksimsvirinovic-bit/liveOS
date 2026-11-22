@@ -89,6 +89,7 @@ Process*  process_create(int ppid, AddressSpace* as, const char* name);
 void      process_destroy(Process* p);
 Process*  process_get_by_pid(int pid);
 int       process_count(void);
+Process*  process_first(void);
 void      process_setup_initial_frame(Process* p, uint64_t rip, uint64_t rsp,
                                   uint64_t cs, uint64_t ss, uint64_t rflags);
 int       sys_getpid_impl(void);
