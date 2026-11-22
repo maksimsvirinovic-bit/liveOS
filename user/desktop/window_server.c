@@ -28,9 +28,9 @@ static void gui_smp_unlock(GuiSmpLock* lock) {
 }
 
 static GuiWindow* owned_window(WindowServer* server, int window_id, int owner_pid) {
-    if (!server || !server->desktop || window_id < 0 || window_id >= GUI_MAX_WINDOWS) return NULL;
-    GuiWindow* window = &server->desktop->windows[window_id];
-    if (!window->used || window->owner_pid != owner_pid) return NULL;
+    if (!server || !server->desktop) return NULL;
+    GuiWindow* window = gui_window_find(server->desktop, window_id);
+    if (!window || !window->used || window->owner_pid != owner_pid) return NULL;
     return window;
 }
 
@@ -70,15 +70,16 @@ int window_server_create_window(WindowServer* server, const char* title, int x, 
     if (!server || !server->desktop || !title) return -1;
     int id = gui_window_create(server->desktop, title, x, y, width, height, NULL, NULL);
     if (id < 0) return -1;
-    server->desktop->windows[id].owner_pid = owner_pid;
+    GuiWindow* w = gui_window_find(server->desktop, id);
+    if (w) w->owner_pid = owner_pid;
     window_server_request_redraw(server);
     return id;
 }
 
 int window_server_move_window(WindowServer* server, int window_id, int x, int y) {
-    if (!server || !server->desktop || window_id < 0 || window_id >= GUI_MAX_WINDOWS) return -1;
-    GuiWindow* window = &server->desktop->windows[window_id];
-    if (!window->used) return -1;
+    if (!server || !server->desktop) return -1;
+    GuiWindow* window = gui_window_find(server->desktop, window_id);
+    if (!window || !window->used) return -1;
     window->x = x;
     window->y = y;
     window_server_request_redraw(server);
@@ -86,21 +87,18 @@ int window_server_move_window(WindowServer* server, int window_id, int x, int y)
 }
 
 int window_server_destroy_window(WindowServer* server, int window_id) {
-    if (!server || !server->desktop || window_id < 0 || window_id >= GUI_MAX_WINDOWS) return -1;
+    if (!server || !server->desktop) return -1;
     gui_window_destroy(server->desktop, window_id);
     window_server_request_redraw(server);
     return 0;
 }
 
 int window_server_set_window_title(WindowServer* server, int window_id, const char* title) {
-    if (!server || !server->desktop || !title || window_id < 0 || window_id >= GUI_MAX_WINDOWS) return -1;
-    GuiWindow* window = &server->desktop->windows[window_id];
-    if (!window->used) return -1;
+    if (!server || !server->desktop || !title) return -1;
+    GuiWindow* window = gui_window_find(server->desktop, window_id);
+    if (!window || !window->used) return -1;
     uint32_t i = 0;
-    while (title[i] && i + 1 < sizeof(window->title)) {
-        window->title[i] = title[i];
-        i++;
-    }
+    while (title[i] && i + 1 < sizeof(window->title)) { window->title[i] = title[i]; i++; }
     window->title[i] = '\0';
     window_server_request_redraw(server);
     return 0;
@@ -119,7 +117,9 @@ int window_server_add_image(WindowServer* server, const char* name, uint32_t wid
 
 int window_server_animate_window(WindowServer* server, int window_id, int from_x, int from_y,
                                 int to_x, int to_y, uint32_t duration_ms, GuiAnimationKind kind) {
-    if (!server || !server->desktop || window_id < 0 || window_id >= GUI_MAX_WINDOWS) return -1;
+    if (!server || !server->desktop) return -1;
+    GuiWindow* window = gui_window_find(server->desktop, window_id);
+    if (!window) return -1;
     if (gui_desktop_add_animation(server->desktop, window_id, from_x, from_y, to_x, to_y,
                                   server->tick_ms ? server->tick_ms : 0, duration_ms, kind) < 0) {
         return -1;
@@ -171,11 +171,8 @@ int window_server_dispatch_message(WindowServer* server, const WindowServerMessa
                 ? window_server_set_window_title(server, request->window_id, title_buf[0] ? title_buf : "Window") : -1;
             break;
         case WINDOW_MSG_CREATE_CONTROL: {
-            GuiWindow* window = NULL;
-            if (request->window_id >= 0 && request->window_id < GUI_MAX_WINDOWS) {
-                window = &server->desktop->windows[request->window_id];
-                if (!window->used) window = NULL;
-            }
+            GuiWindow* window = gui_window_find(server->desktop, request->window_id);
+            if (window && !window->used) window = NULL;
             int control_id = window ? gui_control_add(server->desktop, request->window_id,
                 (GuiControlType)request->control_type, request->x, request->y,
                 request->width, request->height, title_buf) : -1;
@@ -187,11 +184,8 @@ int window_server_dispatch_message(WindowServer* server, const WindowServerMessa
             break;
         }
         case WINDOW_MSG_UPDATE_CONTROL: {
-            GuiWindow* window = NULL;
-            if (request->window_id >= 0 && request->window_id < GUI_MAX_WINDOWS) {
-                window = &server->desktop->windows[request->window_id];
-                if (!window->used) window = NULL;
-            }
+            GuiWindow* window = gui_window_find(server->desktop, request->window_id);
+            if (window && !window->used) window = NULL;
             if (window && request->control_id >= 0 &&
                 (uint32_t)request->control_id < window->control_count) {
                 GuiControl* control = &window->controls[request->control_id];
@@ -261,8 +255,8 @@ void window_server_tick(WindowServer* server, uint32_t now_ms) {
         uint32_t elapsed = now_ms - anim->start_ms;
         if (elapsed >= anim->duration_ms) {
             anim->active = 0;
-            server->desktop->windows[anim->window_id].x = anim->to_x;
-            server->desktop->windows[anim->window_id].y = anim->to_y;
+            GuiWindow* w = gui_window_find(server->desktop, anim->window_id);
+            if (w) { w->x = anim->to_x; w->y = anim->to_y; }
             server->pending_redraw = 1;
             continue;
         }
@@ -270,8 +264,8 @@ void window_server_tick(WindowServer* server, uint32_t now_ms) {
         int x = anim->from_x + ((anim->to_x - anim->from_x) * blend) / 1000;
         int y = anim->from_y + ((anim->to_y - anim->from_y) * blend) / 1000;
         if (anim->window_id >= 0 && anim->window_id < GUI_MAX_WINDOWS) {
-            server->desktop->windows[anim->window_id].x = x;
-            server->desktop->windows[anim->window_id].y = y;
+            GuiWindow* w = gui_window_find(server->desktop, anim->window_id);
+            if (w) { w->x = x; w->y = y; }
         }
         server->pending_redraw = 1;
     }
@@ -350,12 +344,12 @@ void gui_desktop_update_animations(GuiDesktop* desktop, uint32_t now_ms) {
         uint32_t elapsed = now_ms - anim->start_ms;
         if (elapsed >= anim->duration_ms) {
             anim->active = 0;
-            desktop->windows[anim->window_id].x = anim->to_x;
-            desktop->windows[anim->window_id].y = anim->to_y;
+            GuiWindow* w = gui_window_find(desktop, anim->window_id);
+            if (w) { w->x = anim->to_x; w->y = anim->to_y; }
             continue;
         }
         int progress = (int)((elapsed * 1000u) / anim->duration_ms);
-        desktop->windows[anim->window_id].x = anim->from_x + ((anim->to_x - anim->from_x) * progress) / 1000;
-        desktop->windows[anim->window_id].y = anim->from_y + ((anim->to_y - anim->from_y) * progress) / 1000;
+        GuiWindow* w = gui_window_find(desktop, anim->window_id);
+        if (w) { w->x = anim->from_x + ((anim->to_x - anim->from_x) * progress) / 1000; w->y = anim->from_y + ((anim->to_y - anim->from_y) * progress) / 1000; }
     }
 }

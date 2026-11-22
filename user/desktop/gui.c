@@ -83,9 +83,24 @@ static void rounded_fill(GuiDesktop* desktop, int x, int y, int width, int heigh
     }
 }
 
+GuiWindow* gui_window_find(GuiDesktop* desktop, int window_id) {
+    if (!desktop || window_id < 0) return NULL;
+    for (GuiWindowNode* n = desktop->windows; n; n = n->next) {
+        if (n->id == window_id) return &n->w;
+    }
+    return NULL;
+}
+
+int gui_window_id(const GuiDesktop* desktop, const GuiWindow* w) {
+    if (!desktop || !w) return -1;
+    for (GuiWindowNode* n = desktop->windows; n; n = n->next) {
+        if (&n->w == w) return n->id;
+    }
+    return -1;
+}
+
 static GuiWindow* get_window(GuiDesktop* desktop, int id) {
-    if (!desktop || id < 0 || id >= GUI_MAX_WINDOWS || !desktop->windows[id].used) return 0;
-    return &desktop->windows[id];
+    return gui_window_find(desktop, id);
 }
 
 void gui_desktop_init(GuiDesktop* desktop, uint32_t width, uint32_t height) {
@@ -95,6 +110,9 @@ void gui_desktop_init(GuiDesktop* desktop, uint32_t width, uint32_t height) {
     desktop->height = height;
     desktop->focused_window = -1;
     desktop->next_z = 1;
+    desktop->next_window_id = 0;
+    desktop->windows = NULL;
+    desktop->window_count = 0;
     desktop->mouse_x = (int)(width / 2);
     desktop->mouse_y = (int)(height / 2);
 }
@@ -174,48 +192,62 @@ void gui_context_menu_show(GuiDesktop* desktop, int x, int y,
 int gui_window_create(GuiDesktop* desktop, const char* title, int x, int y,
                       int width, int height, GuiAction action, void* context) {
     if (!desktop || width < 100 || height < 64) return -1;
-    for (int i = 0; i < GUI_MAX_WINDOWS; i++) {
-        GuiWindow* window = &desktop->windows[i];
-        if (window->used) continue;
-        if (desktop->focused_window >= 0 && desktop->focused_window < GUI_MAX_WINDOWS) {
-            GuiWindow* previous = &desktop->windows[desktop->focused_window];
-            if (previous->used && previous->focus_action) previous->focus_action(previous->focus_context, 0);
-        }
-        for (uint32_t j = 0; j < sizeof(*window); j++) ((uint8_t*)window)[j] = 0;
-        window->used = 1;
-        window->visible = 1;
-        window->x = x;
-        window->y = y;
-        window->width = width;
-        window->height = height;
-        window->normal_x = x;
-        window->normal_y = y;
-        window->normal_width = width;
-        window->normal_height = height;
-        window->z = desktop->next_z++;
-        window->focused_control = -1;
-        window->action = action;
-        window->action_context = context;
-        text_copy(window->title, sizeof(window->title), title);
-        desktop->focused_window = i;
-        return i;
+
+    if (desktop->focused_window >= 0) {
+        GuiWindow* previous = gui_window_find(desktop, desktop->focused_window);
+        if (previous && previous->focus_action) previous->focus_action(previous->focus_context, 0);
     }
-    return -1;
+
+    GuiWindowNode* node = (GuiWindowNode*)malloc(sizeof(GuiWindowNode));
+    if (!node) return -1;
+    memset(node, 0, sizeof(*node));
+    node->id = desktop->next_window_id++;
+    node->w.used = 1;
+    node->w.visible = 1;
+    node->w.x = x;
+    node->w.y = y;
+    node->w.width = width;
+    node->w.height = height;
+    node->w.normal_x = x;
+    node->w.normal_y = y;
+    node->w.normal_width = width;
+    node->w.normal_height = height;
+    node->w.z = desktop->next_z++;
+    node->w.focused_control = -1;
+    node->w.action = action;
+    node->w.action_context = context;
+    text_copy(node->w.title, sizeof(node->w.title), title);
+
+    node->next = desktop->windows;
+    desktop->windows = node;
+    desktop->window_count++;
+    desktop->focused_window = node->id;
+    return node->id;
 }
 
 void gui_window_destroy(GuiDesktop* desktop, int window_id) {
-    GuiWindow* window = get_window(desktop, window_id);
-    if (!window) return;
-    if (window->owner_pid > 0) {
-        UserWindowMessage event = {0};
-        event.type = USER_WINDOW_MSG_CLOSE;
-        event.window_id = window_id;
-        sys_window_reply(window->owner_pid, &event);
+    if (!desktop) return;
+    GuiWindowNode** pp = &desktop->windows;
+    while (*pp) {
+        GuiWindowNode* n = *pp;
+        if (n->id != window_id) { pp = &n->next; continue; }
+
+        GuiWindow* window = &n->w;
+        if (window->owner_pid > 0) {
+            UserWindowMessage event = {0};
+            event.type = USER_WINDOW_MSG_CLOSE;
+            event.window_id = window_id;
+            sys_window_reply(window->owner_pid, &event);
+        }
+        if (window->close_action) window->close_action(window->close_context);
+        if (window->focus_action) window->focus_action(window->focus_context, 0);
+
+        if (desktop->focused_window == window_id) desktop->focused_window = -1;
+        *pp = n->next;
+        free(n);
+        desktop->window_count--;
+        return;
     }
-    if (window->close_action) window->close_action(window->close_context);
-    if (window->focus_action) window->focus_action(window->focus_context, 0);
-    if (desktop->focused_window == window_id) desktop->focused_window = -1;
-    for (uint32_t i = 0; i < sizeof(*window); i++) ((uint8_t*)window)[i] = 0;
 }
 
 int gui_control_add(GuiDesktop* desktop, int window_id, GuiControlType type,
@@ -261,9 +293,10 @@ int gui_list_set_item(GuiDesktop* desktop, int window_id, int control_id,
 }
 
 int gui_list_get_selected(const GuiDesktop* desktop, int window_id, int control_id) {
-    if (!desktop || window_id < 0 || window_id >= GUI_MAX_WINDOWS) return -1;
-    const GuiWindow* window = &desktop->windows[window_id];
-    if (!window->used || control_id < 0 || (uint32_t)control_id >= window->control_count) return -1;
+    if (!desktop || window_id < 0) return -1;
+    const GuiWindow* window = gui_window_find((GuiDesktop*)desktop, window_id);
+    if (!window || !window->used || control_id < 0 ||
+        (uint32_t)control_id >= window->control_count) return -1;
     return window->controls[control_id].selected;
 }
 
@@ -378,9 +411,9 @@ static void draw_control(GuiDesktop* desktop, const GuiControl* control, int x, 
 static void draw_window(GuiDesktop* desktop, GuiWindow* window) {
     if (!window->used || !window->visible) return;
     uint32_t title_color = desktop->focused_window >= 0 &&
-                           &desktop->windows[desktop->focused_window] == window ? C_TITLE_F : C_TITLE;
+                           gui_window_find(desktop, desktop->focused_window) == window ? C_TITLE_F : C_TITLE;
     uint32_t border_color = desktop->focused_window >= 0 &&
-                            &desktop->windows[desktop->focused_window] == window ? C_TITLE_F : C_BORDER;
+                            gui_window_find(desktop, desktop->focused_window) == window ? C_TITLE_F : C_BORDER;
     rounded_fill(desktop, window->x + 3, window->y + 3, window->width, window->height, C_BLACK, 0);
     rounded_fill(desktop, window->x, window->y, window->width, window->height, border_color, 0);
     rounded_fill(desktop, window->x + 1, window->y + 1, window->width - 2,
@@ -411,10 +444,9 @@ void gui_desktop_draw(GuiDesktop* desktop) {
     fill_clamped(desktop, 0, 0, (int)desktop->width, (int)desktop->height - TASKBAR_H,
                  desktop->background_color ? desktop->background_color : C_DESK);
     for (int z = 1; z < desktop->next_z; z++) {
-        for (int i = 0; i < GUI_MAX_WINDOWS; i++) {
-            if (desktop->windows[i].used && desktop->windows[i].visible &&
-                !desktop->windows[i].minimized && desktop->windows[i].z == z) {
-                draw_window(desktop, &desktop->windows[i]);
+        for (GuiWindowNode* n = desktop->windows; n; n = n->next) {
+            if (n->w.used && n->w.visible && !n->w.minimized && n->w.z == z) {
+                draw_window(desktop, &n->w);
             }
         }
     }
@@ -423,13 +455,13 @@ void gui_desktop_draw(GuiDesktop* desktop) {
     fill_clamped(desktop, 8, (int)desktop->height - 24, 72, 20, accent);
     render_draw_text(20, (int)desktop->height - 18, C_WHITE, accent, "LiveOS");
     int task_x = 88;
-    for (int i = 0; i < GUI_MAX_WINDOWS; i++) {
-        GuiWindow* window = &desktop->windows[i];
+    for (GuiWindowNode* n = desktop->windows; n; n = n->next) {
+        GuiWindow* window = &n->w;
         if (!window->used) continue;
         fill_clamped(desktop, task_x, (int)desktop->height - 24, 104, 20,
-                 desktop->focused_window == i && !window->minimized ? C_BUTTON_H : C_BUTTON);
+                 desktop->focused_window == n->id && !window->minimized ? C_BUTTON_H : C_BUTTON);
         render_draw_text(task_x + 5, (int)desktop->height - 18, C_TEXT,
-                 desktop->focused_window == i && !window->minimized ? C_BUTTON_H : C_BUTTON,
+                 desktop->focused_window == n->id && !window->minimized ? C_BUTTON_H : C_BUTTON,
                  window->title);
         task_x += 108;
     }
@@ -482,8 +514,8 @@ void gui_desktop_draw(GuiDesktop* desktop) {
 
 void gui_desktop_draw_excluding(GuiDesktop* desktop, int excluded_window) {
     if (!desktop) return;
-    GuiWindow* excluded = (excluded_window >= 0 && excluded_window < GUI_MAX_WINDOWS)
-        ? &desktop->windows[excluded_window] : NULL;
+    GuiWindow* excluded = (excluded_window >= 0)
+        ? gui_window_find(desktop, excluded_window) : NULL;
     int visible = excluded ? excluded->visible : 0;
     if (excluded) excluded->visible = 0;
     gui_desktop_draw(desktop);
@@ -491,20 +523,20 @@ void gui_desktop_draw_excluding(GuiDesktop* desktop, int excluded_window) {
 }
 
 void gui_desktop_draw_window(GuiDesktop* desktop, int window_id) {
-    if (!desktop || window_id < 0 || window_id >= GUI_MAX_WINDOWS) return;
-    GuiWindow* window = &desktop->windows[window_id];
-    if (window->used && window->visible) draw_window(desktop, window);
+    if (!desktop || window_id < 0) return;
+    GuiWindow* window = gui_window_find(desktop, window_id);
+    if (window && window->used && window->visible) draw_window(desktop, window);
 }
 
 static int window_at(GuiDesktop* desktop, int x, int y) {
     int found = -1;
     int top_z = -1;
-    for (int i = 0; i < GUI_MAX_WINDOWS; i++) {
-        GuiWindow* window = &desktop->windows[i];
+    for (GuiWindowNode* n = desktop->windows; n; n = n->next) {
+        GuiWindow* window = &n->w;
         if (!window->used || !window->visible || window->minimized) continue;
         if (x >= window->x && x < window->x + window->width &&
             y >= window->y && y < window->y + window->height && window->z > top_z) {
-            found = i;
+            found = n->id;
             top_z = window->z;
         }
     }
@@ -522,17 +554,17 @@ static int control_at(GuiWindow* window, int x, int y) {
 }
 
 static void focus_window(GuiDesktop* desktop, int id) {
-    if (id < 0 || id >= GUI_MAX_WINDOWS || !desktop->windows[id].used) return;
-    if (desktop->focused_window >= 0 && desktop->focused_window < GUI_MAX_WINDOWS &&
-        desktop->focused_window != id) {
-        GuiWindow* old = &desktop->windows[desktop->focused_window];
-        if (old->used && old->focus_action) old->focus_action(old->focus_context, 0);
+    GuiWindow* target = gui_window_find(desktop, id);
+    if (!target || !target->used) return;
+    if (desktop->focused_window >= 0 && desktop->focused_window != id) {
+        GuiWindow* old = gui_window_find(desktop, desktop->focused_window);
+        if (old && old->used && old->focus_action) old->focus_action(old->focus_context, 0);
     }
     desktop->focused_window = id;
-    desktop->windows[id].visible = 1;
-    desktop->windows[id].minimized = 0;
-    desktop->windows[id].z = desktop->next_z++;
-    if (desktop->windows[id].focus_action) desktop->windows[id].focus_action(desktop->windows[id].focus_context, 1);
+    target->visible = 1;
+    target->minimized = 0;
+    target->z = desktop->next_z++;
+    if (target->focus_action) target->focus_action(target->focus_context, 1);
 }
 
 static void maximize_window(GuiDesktop* desktop, GuiWindow* window) {
@@ -572,7 +604,7 @@ void gui_desktop_handle_pointer(GuiDesktop* desktop, int x, int y, uint32_t butt
     if (right_pressed) {
         int id = window_at(desktop, x, y);
         if (id >= 0) {
-            GuiWindow* window = &desktop->windows[id];
+            GuiWindow* window = gui_window_find(desktop, id);
             focus_window(desktop, id);
             if (window->context_action) {
                 window->context_action(window->context_context, x, y);
@@ -597,8 +629,9 @@ void gui_desktop_handle_pointer(GuiDesktop* desktop, int x, int y, uint32_t butt
             desktop->context_open = 0;
             if (inside) {
                 if (action) action(context, item);
-                else if (context_window >= 0 && context_window < GUI_MAX_WINDOWS && desktop->windows[context_window].used) {
-                    GuiWindow* target = &desktop->windows[context_window];
+                else {
+                        GuiWindow* target = (context_window >= 0)
+                                        ? gui_window_find(desktop, context_window) : NULL;
                     if (item == 0) {
                         target->minimized = 1;
                         target->visible = 0;
@@ -619,18 +652,16 @@ void gui_desktop_handle_pointer(GuiDesktop* desktop, int x, int y, uint32_t butt
             if (x < 88) return;
             int item = (x - 88) / 108;
             int seen = 0;
-            for (int i = 0; i < GUI_MAX_WINDOWS; i++) {
-                if (!desktop->windows[i].used) continue;
+            for (GuiWindowNode* n = desktop->windows; n; n = n->next) {
+                if (!n->w.used) continue;
                 if (seen++ == item) {
-                    if (desktop->focused_window == i && !desktop->windows[i].minimized) {
-                        desktop->windows[i].minimized = 1;
-                        desktop->windows[i].visible = 0;
-                        if (desktop->windows[i].focus_action) {
-                            desktop->windows[i].focus_action(desktop->windows[i].focus_context, 0);
-                        }
+                    if (desktop->focused_window == n->id && !n->w.minimized) {
+                        n->w.minimized = 1;
+                        n->w.visible = 0;
+                        if (n->w.focus_action) n->w.focus_action(n->w.focus_context, 0);
                         desktop->focused_window = -1;
                     } else {
-                        focus_window(desktop, i);
+                        focus_window(desktop, n->id);
                     }
                     return;
                 }
@@ -647,15 +678,15 @@ void gui_desktop_handle_pointer(GuiDesktop* desktop, int x, int y, uint32_t butt
         }
         int id = window_at(desktop, x, y);
         if (id < 0) {
-            if (desktop->focused_window >= 0 && desktop->focused_window < GUI_MAX_WINDOWS) {
-                GuiWindow* old = &desktop->windows[desktop->focused_window];
-                if (old->used && old->focus_action) old->focus_action(old->focus_context, 0);
+            if (desktop->focused_window >= 0) {
+                GuiWindow* old = gui_window_find(desktop, desktop->focused_window);
+                if (old && old->used && old->focus_action) old->focus_action(old->focus_context, 0);
             }
             desktop->focused_window = -1;
             return;
         }
         focus_window(desktop, id);
-        GuiWindow* window = &desktop->windows[id];
+        GuiWindow* window = gui_window_find(desktop, id);
         if (y < window->y + TITLE_H) {
             int buttons_x = window->x + window->width - 3 * TITLE_BUTTON - 4;
             if (x >= buttons_x + 2 * TITLE_BUTTON) {
@@ -722,11 +753,11 @@ void gui_desktop_handle_pointer(GuiDesktop* desktop, int x, int y, uint32_t butt
         }
     }
     if (released) {
-        for (int i = 0; i < GUI_MAX_WINDOWS; i++) desktop->windows[i].dragging = 0;
+        for (GuiWindowNode* n = desktop->windows; n; n = n->next) n->w.dragging = 0;
     }
     if (buttons & 1u) {
-        for (int i = 0; i < GUI_MAX_WINDOWS; i++) {
-            GuiWindow* window = &desktop->windows[i];
+        for (GuiWindowNode* n = desktop->windows; n; n = n->next) {
+            GuiWindow* window = &n->w;
             if (window->used && window->dragging) {
                 window->x = x - window->drag_dx;
                 window->y = y - window->drag_dy;
@@ -739,9 +770,9 @@ void gui_desktop_handle_key(GuiDesktop* desktop, int key) {
     if (!desktop) return;
     if (desktop->key_action) desktop->key_action(desktop->key_context, key);
     if (key == 27) { desktop->start_open = 0; return; }
-    if (desktop->focused_window < 0 || desktop->focused_window >= GUI_MAX_WINDOWS) return;
-    GuiWindow* window = &desktop->windows[desktop->focused_window];
-    if (!window->used || window->focused_control < 0 ||
+    if (desktop->focused_window < 0) return;
+    GuiWindow* window = gui_window_find(desktop, desktop->focused_window);
+    if (!window || !window->used || window->focused_control < 0 ||
         (uint32_t)window->focused_control >= window->control_count) return;
     GuiControl* control = &window->controls[window->focused_control];
     if (window->owner_pid > 0) {
@@ -852,9 +883,9 @@ int gui_app_add_control(GuiAppContext* app, int window_id, GuiControlType type,
 }
 
 void gui_app_set_action(GuiAppContext* app, int window_id, GuiAction action, void* context) {
-    if (!app || window_id < 0 || window_id >= GUI_MAX_WINDOWS) return;
-    GuiWindow* window = &app->desktop.windows[window_id];
-    if (!window->used) return;
+    if (!app || window_id < 0) return;
+    GuiWindow* window = gui_window_find(&app->desktop, window_id);
+    if (!window || !window->used) return;
     window->action = action;
     window->action_context = context;
 }

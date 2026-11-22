@@ -1,5 +1,4 @@
-static void fonts_closed(void* context);
-#include <stddef.h>
+#include <stdio.h>
 #include "../sys.h"
 #include "gui.h"
 #include "render.h"
@@ -73,6 +72,7 @@ static void script_closed(void* context);
 static void window_context(void* context, int x, int y);
 static void window_context_action(void* context, int item);
 static void register_window_context(int window_id);
+static void fonts_closed(void* context);
 
 static void copy_text(char* destination, uint32_t capacity, const char* source) {
     uint32_t index = 0;
@@ -227,55 +227,55 @@ static void script_preview(void* context, int x, int y, int width, int height) {
 
 static void script_action(void* context, GuiControl* control) {
     (void)context;
-    if (script_window < 0 || !desktop.windows[script_window].used) return;
+    if (script_window < 0 || !gui_window_find(&desktop, script_window)->used) return;
     if (control->text[0] == 'N') {
         script_source[0] = '\0';
-        desktop.windows[script_window].controls[script_text_control].text[0] = '\0';
-        copy_text(desktop.windows[script_window].controls[script_status_control].text,
-                  sizeof(desktop.windows[script_window].controls[script_status_control].text), "New document");
+        gui_window_find(&desktop, script_window)->controls[script_text_control].text[0] = '\0';
+        copy_text(gui_window_find(&desktop, script_window)->controls[script_status_control].text,
+                  sizeof(gui_window_find(&desktop, script_window)->controls[script_status_control].text), "New document");
         return;
     }
     if (control->text[0] == 'O') {
         char path[FILE_PATH_MAX];
-        copy_text(path, sizeof(path), desktop.windows[script_window].controls[0].text);
+        copy_text(path, sizeof(path), gui_window_find(&desktop, script_window)->controls[0].text);
         int fd = sys_open(path, FS_READ);
         if (fd < 0) {
-            copy_text(desktop.windows[script_window].controls[script_status_control].text,
-                      sizeof(desktop.windows[script_window].controls[script_status_control].text), "Open failed");
+            copy_text(gui_window_find(&desktop, script_window)->controls[script_status_control].text,
+                      sizeof(gui_window_find(&desktop, script_window)->controls[script_status_control].text), "Open failed");
             return;
         }
         int count = sys_read(fd, script_source, sizeof(script_source) - 1);
         sys_close(fd);
         if (count < 0) return;
         script_source[count] = '\0';
-        copy_text(desktop.windows[script_window].controls[script_text_control].text,
-                  sizeof(desktop.windows[script_window].controls[script_text_control].text), script_source);
+        copy_text(gui_window_find(&desktop, script_window)->controls[script_text_control].text,
+                  sizeof(gui_window_find(&desktop, script_window)->controls[script_text_control].text), script_source);
         copy_text(script_path, sizeof(script_path), path);
-        copy_text(desktop.windows[script_window].controls[script_status_control].text,
-                  sizeof(desktop.windows[script_window].controls[script_status_control].text), "Opened");
+        copy_text(gui_window_find(&desktop, script_window)->controls[script_status_control].text,
+                  sizeof(gui_window_find(&desktop, script_window)->controls[script_status_control].text), "Opened");
         return;
     }
     if (control->text[0] == 'P' || control->text[0] == 'S' || control->text[0] == 'R') {
-        copy_text(script_source, sizeof(script_source), desktop.windows[script_window].controls[script_text_control].text);
+        copy_text(script_source, sizeof(script_source), gui_window_find(&desktop, script_window)->controls[script_text_control].text);
         if (control->text[0] == 'S') {
-            copy_text(script_path, sizeof(script_path), desktop.windows[script_window].controls[0].text);
+            copy_text(script_path, sizeof(script_path), gui_window_find(&desktop, script_window)->controls[0].text);
             int fd = sys_open(script_path, FS_WRITE | FS_CREATE | FS_TRUNCATE);
             if (fd < 0) {
-                copy_text(desktop.windows[script_window].controls[script_status_control].text,
-                          sizeof(desktop.windows[script_window].controls[script_status_control].text), "Save failed");
+                copy_text(gui_window_find(&desktop, script_window)->controls[script_status_control].text,
+                          sizeof(gui_window_find(&desktop, script_window)->controls[script_status_control].text), "Save failed");
                 return;
             }
             uint32_t length = 0;
             while (script_source[length] && length < sizeof(script_source) - 1) length++;
             int written = sys_write(fd, script_source, length);
             sys_close(fd);
-            copy_text(desktop.windows[script_window].controls[script_status_control].text,
-                      sizeof(desktop.windows[script_window].controls[script_status_control].text),
+            copy_text(gui_window_find(&desktop, script_window)->controls[script_status_control].text,
+                      sizeof(gui_window_find(&desktop, script_window)->controls[script_status_control].text),
                       written == (int)length ? "Saved" : "Save failed");
             return;
         }
-        copy_text(desktop.windows[script_window].controls[script_status_control].text,
-                  sizeof(desktop.windows[script_window].controls[script_status_control].text),
+        copy_text(gui_window_find(&desktop, script_window)->controls[script_status_control].text,
+                  sizeof(gui_window_find(&desktop, script_window)->controls[script_status_control].text),
                   control->text[0] == 'R' ? "Script rendered" : "Preview updated");
     }
 }
@@ -299,7 +299,7 @@ static void open_script_studio(void) {
     script_canvas_control = gui_control_add(&desktop, id, GUI_CANVAS, 414, 40, 410, 478, "");
     gui_canvas_set_action(&desktop, id, script_canvas_control, script_preview, NULL);
     script_status_control = gui_control_add(&desktop, id, GUI_LABEL, 10, 526, 800, 16, "Restricted markup + integer math");
-    desktop.windows[id].action = script_action;
+    gui_window_find(&desktop, id)->action = script_action;
     script_source[0] = '\0';
 }
 
@@ -313,9 +313,9 @@ static int load_ui_script(const char* path) {
     source[count] = '\0';
     copy_text(script_path, sizeof(script_path), path);
     open_script_studio();
-    if (script_window < 0 || !desktop.windows[script_window].used) return -1;
-    copy_text(desktop.windows[script_window].controls[script_text_control].text,
-              sizeof(desktop.windows[script_window].controls[script_text_control].text), source);
+    if (script_window < 0 || !gui_window_find(&desktop, script_window)->used) return -1;
+    copy_text(gui_window_find(&desktop, script_window)->controls[script_text_control].text,
+              sizeof(gui_window_find(&desktop, script_window)->controls[script_text_control].text), source);
     copy_text(script_source, sizeof(script_source), source);
     return 0;
 }
@@ -383,18 +383,18 @@ static void fonts_closed(void* context) {
 }
 
 static void show_desktop_window(int* window_id, void (*open_window)(void)) {
-    if (*window_id < 0 || *window_id >= GUI_MAX_WINDOWS || !desktop.windows[*window_id].used) {
+    if (*window_id < 0 || *window_id >= GUI_MAX_WINDOWS || !gui_window_find(&desktop, *window_id)->used) {
         *window_id = -1;
         open_window();
         return;
     }
 
     GuiWindow* previous = desktop.focused_window >= 0 && desktop.focused_window < GUI_MAX_WINDOWS
-        ? &desktop.windows[desktop.focused_window] : NULL;
+        ? gui_window_find(&desktop, desktop.focused_window) : NULL;
     if (previous && previous->used && previous->focus_action) {
         previous->focus_action(previous->focus_context, 0);
     }
-    GuiWindow* window = &desktop.windows[*window_id];
+    GuiWindow* window = gui_window_find(&desktop, *window_id);
     window->visible = 1;
     window->minimized = 0;
     window->z = desktop.next_z++;
@@ -425,8 +425,8 @@ static int terminal_refresh(void) {
         }
         terminal_output[current] = '\0';
     }
-    copy_text(desktop.windows[terminal_window].controls[terminal_output_control].text,
-              sizeof(desktop.windows[terminal_window].controls[terminal_output_control].text), terminal_output);
+    copy_text(gui_window_find(&desktop, terminal_window)->controls[terminal_output_control].text,
+              sizeof(gui_window_find(&desktop, terminal_window)->controls[terminal_output_control].text), terminal_output);
     return changed;
 }
 
@@ -487,14 +487,14 @@ static int normalize_files_path(const char* input, char* output, uint32_t capaci
 
 static void files_status(const char* message) {
     if (files_window >= 0 && files_status_control >= 0) {
-        copy_text(desktop.windows[files_window].controls[files_status_control].text,
-                  sizeof(desktop.windows[files_window].controls[files_status_control].text), message);
+        copy_text(gui_window_find(&desktop, files_window)->controls[files_status_control].text,
+                  sizeof(gui_window_find(&desktop, files_window)->controls[files_status_control].text), message);
     }
 }
 
 static void files_refresh(void) {
     if (files_window < 0) return;
-    GuiWindow* window = &desktop.windows[files_window];
+    GuiWindow* window = gui_window_find(&desktop, files_window);
     GuiControl* list = &window->controls[files_list_control];
     copy_text(window->controls[files_path_control].text,
               sizeof(window->controls[files_path_control].text), files_path);
@@ -617,18 +617,18 @@ static void files_add_registry_actions(const char* key) {
 
 static void files_context(void* context, int x, int y) {
     (void)context;
-    if (files_window < 0 || !desktop.windows[files_window].used) return;
-    if (x < desktop.windows[files_window].x + 10 ||
-        x >= desktop.windows[files_window].x + 600 ||
-        y < desktop.windows[files_window].y + 24 + 38 ||
-        y >= desktop.windows[files_window].y + 24 + 396) {
+    if (files_window < 0 || !gui_window_find(&desktop, files_window)->used) return;
+    if (x < gui_window_find(&desktop, files_window)->x + 10 ||
+        x >= gui_window_find(&desktop, files_window)->x + 600 ||
+        y < gui_window_find(&desktop, files_window)->y + 24 + 38 ||
+        y >= gui_window_find(&desktop, files_window)->y + 24 + 396) {
         static const char* window_items[] = { "Minimize", "Maximize / Restore", "Close" };
         gui_context_menu_show(&desktop, x, y, window_items, 3, files_window,
                               files_window_context_action, NULL);
         return;
     }
-    GuiControl* list = &desktop.windows[files_window].controls[files_list_control];
-    int row = (y - (desktop.windows[files_window].y + 24 + 40)) / 16;
+    GuiControl* list = &gui_window_find(&desktop, files_window)->controls[files_list_control];
+    int row = (y - (gui_window_find(&desktop, files_window)->y + 24 + 40)) / 16;
     int index = list->scroll + row;
     if (row < 0 || index < 0 || (uint32_t)index >= files_count || !files_names[index][0]) return;
     list->selected = index;
@@ -678,8 +678,8 @@ static void files_context(void* context, int x, int y) {
 
 static void files_window_context_action(void* context, int item) {
     (void)context;
-    if (files_window < 0 || !desktop.windows[files_window].used) return;
-    GuiWindow* window = &desktop.windows[files_window];
+    if (files_window < 0 || !gui_window_find(&desktop, files_window)->used) return;
+    GuiWindow* window = gui_window_find(&desktop, files_window);
     if (item == 0) {
         window->minimized = 1;
         window->visible = 0;
@@ -707,19 +707,19 @@ static void files_window_context_action(void* context, int item) {
 static void files_context_action(void* context, int item) {
     (void)context;
     if (item < 0 || (uint32_t)item >= file_context_count) return;
-    if (files_window < 0 || !desktop.windows[files_window].used) return;
+    if (files_window < 0 || !gui_window_find(&desktop, files_window)->used) return;
     const char* command = file_context_commands[item];
     if (text_equal(command, "@run-ui")) {
         if (load_ui_script(context_target_path) != 0) files_status("Cannot run UI script");
     } else if (text_equal(command, "@open")) {
-        int selected = desktop.windows[files_window].controls[files_list_control].selected;
+        int selected = gui_window_find(&desktop, files_window)->controls[files_list_control].selected;
         if (selected < 0 || (uint32_t)selected >= files_count) return;
         if (files_attrs[selected] & FS_ATTR_DIR) {
             copy_text(files_path, sizeof(files_path), context_target_path);
             files_refresh();
         } else open_file_path(context_target_path);
     } else if (text_equal(command, "@delete")) {
-        int selected = desktop.windows[files_window].controls[files_list_control].selected;
+        int selected = gui_window_find(&desktop, files_window)->controls[files_list_control].selected;
         int result = (files_attrs[selected] & FS_ATTR_DIR) ? sys_rmdir(context_target_path) : sys_unlink(context_target_path);
         files_status(result == 0 ? "Deleted" : "Delete failed");
         files_refresh();
@@ -775,7 +775,7 @@ static void files_list_click(void* context, GuiControl* control) {
 static void files_action(void* context, GuiControl* control) {
     (void)context;
     if (control->text[0] == 'O') {
-        if (normalize_files_path(desktop.windows[files_window].controls[files_path_control].text,
+        if (normalize_files_path(gui_window_find(&desktop, files_window)->controls[files_path_control].text,
                                  files_path, sizeof(files_path)) != 0) {
             files_status("Invalid path");
             return;
@@ -793,7 +793,7 @@ static void files_action(void* context, GuiControl* control) {
         if (join_path(folder, sizeof(folder), files_path, "NewFolder") == 0 && sys_mkdir(folder) == 0) files_refresh();
         else files_status("Create folder failed");
     } else if (control->text[0] == 'D') {
-        GuiControl* list = &desktop.windows[files_window].controls[files_list_control];
+        GuiControl* list = &gui_window_find(&desktop, files_window)->controls[files_list_control];
         int selected = list->selected;
         if (selected < 0 || (uint32_t)selected >= files_count) return;
         char path[FILE_PATH_MAX];
@@ -808,9 +808,9 @@ static void files_action(void* context, GuiControl* control) {
 
 static void files_key_action(void* context, int key) {
     (void)context;
-    if (files_window < 0 || !desktop.windows[files_window].used || desktop.focused_window != files_window ||
-        key != '\n' || desktop.windows[files_window].focused_control != files_path_control) return;
-    GuiControl* path_control = &desktop.windows[files_window].controls[files_path_control];
+    if (files_window < 0 || !gui_window_find(&desktop, files_window)->used || desktop.focused_window != files_window ||
+        key != '\n' || gui_window_find(&desktop, files_window)->focused_control != files_path_control) return;
+    GuiControl* path_control = &gui_window_find(&desktop, files_window)->controls[files_path_control];
     if (normalize_files_path(path_control->text, files_path, sizeof(files_path)) != 0) {
         files_status("Invalid path");
         return;
@@ -827,7 +827,7 @@ static void open_terminal(void) {
     sys_tty_reset();
     sys_tty_focus(1);
     terminal_output_control = gui_control_add(&desktop, id, GUI_TEXTAREA, 10, 8, 510, 310, terminal_output);
-    if (terminal_output_control >= 0) desktop.windows[id].controls[terminal_output_control].scroll = 1;
+    if (terminal_output_control >= 0) gui_window_find(&desktop, id)->controls[terminal_output_control].scroll = 1;
     gui_control_add(&desktop, id, GUI_LABEL, 12, 326, 510, 16, "Type commands while this window is focused");
     gui_window_set_focus_action(&desktop, id, terminal_focus, NULL);
     gui_window_set_close_action(&desktop, id, terminal_closed, NULL);
@@ -850,7 +850,7 @@ static void open_files(void) {
     gui_window_set_list_action(&desktop, id, files_list_click, NULL);
     gui_window_set_list_activate_action(&desktop, id, files_activate, NULL);
     gui_window_set_context_action(&desktop, id, files_context, NULL);
-    desktop.windows[id].action = files_action;
+    gui_window_find(&desktop, id)->action = files_action;
     files_refresh();
 }
 
@@ -881,14 +881,14 @@ static void open_notes(void) {
     gui_control_add(&desktop, id, GUI_BUTTON, 366, 3, 74, 26, "Load");
     gui_control_add(&desktop, id, GUI_BUTTON, 448, 3, 74, 26, "Save");
     gui_control_add(&desktop, id, GUI_TEXTAREA, 10, 36, 578, 372, "");
-    note_text_control = (int)desktop.windows[id].control_count - 1;
+    note_text_control = (int)gui_window_find(&desktop, id)->control_count - 1;
     note_status_control = gui_control_add(&desktop, id, GUI_LABEL, 12, 414, 560, 16, "Ready");
-    desktop.windows[id].action = notepad_action;
+    gui_window_find(&desktop, id)->action = notepad_action;
 }
 
 static int load_note(void) {
     if (note_window < 0 || note_path_control < 0 || note_text_control < 0) return -1;
-    GuiWindow* window = &desktop.windows[note_window];
+    GuiWindow* window = gui_window_find(&desktop, note_window);
     copy_text(note_path, sizeof(note_path), window->controls[note_path_control].text);
     int fd = sys_open(note_path, FS_READ);
     if (fd < 0) {
@@ -912,7 +912,7 @@ static int load_note(void) {
 
 static int save_note(void) {
     if (note_window < 0 || note_path_control < 0 || note_text_control < 0) return -1;
-    GuiWindow* window = &desktop.windows[note_window];
+    GuiWindow* window = gui_window_find(&desktop, note_window);
     copy_text(note_path, sizeof(note_path), window->controls[note_path_control].text);
     int fd = sys_open(note_path, FS_WRITE | FS_CREATE | FS_TRUNCATE);
     if (fd < 0) {
@@ -967,8 +967,8 @@ static void registry_select(void* context, GuiControl* control) {
     UserRegEntry entry;
     if (sys_reg_enum(registry_path, (uint32_t)selected, &entry) != 0) return;
     if (!entry.is_key) {
-        copy_text(desktop.windows[registry_window].controls[1].text,
-                  sizeof(desktop.windows[registry_window].controls[1].text), entry.text);
+        copy_text(gui_window_find(&desktop, registry_window)->controls[1].text,
+                  sizeof(gui_window_find(&desktop, registry_window)->controls[1].text), entry.text);
         return;
     }
     uint32_t length = 0;
@@ -976,8 +976,8 @@ static void registry_select(void* context, GuiControl* control) {
     if (length + 1 + 32 >= sizeof(registry_path)) return;
     registry_path[length++] = '/';
     copy_text(registry_path + length, sizeof(registry_path) - length, entry.name);
-    copy_text(desktop.windows[registry_window].controls[0].text,
-              sizeof(desktop.windows[registry_window].controls[0].text), registry_path);
+    copy_text(gui_window_find(&desktop, registry_window)->controls[0].text,
+              sizeof(gui_window_find(&desktop, registry_window)->controls[0].text), registry_path);
     registry_refresh();
 }
 
@@ -992,19 +992,19 @@ static void registry_up(void) {
 
 static void registry_action(void* context, GuiControl* control) {
     (void)context;
-    if (control == &desktop.windows[registry_window].controls[0]) {
+    if (control == &gui_window_find(&desktop, registry_window)->controls[0]) {
         copy_text(registry_path, sizeof(registry_path), control->text);
         registry_refresh();
         return;
     }
     if (control->text[0] == 'U') {
         registry_up();
-        copy_text(desktop.windows[registry_window].controls[0].text,
-                  sizeof(desktop.windows[registry_window].controls[0].text), registry_path);
+        copy_text(gui_window_find(&desktop, registry_window)->controls[0].text,
+                  sizeof(gui_window_find(&desktop, registry_window)->controls[0].text), registry_path);
         return;
     }
     UserRegEntry entry;
-    int selected = desktop.windows[registry_window].controls[registry_value_control].selected;
+    int selected = gui_window_find(&desktop, registry_window)->controls[registry_value_control].selected;
     if (selected < 0 || sys_reg_enum(registry_path, (uint32_t)selected, &entry) != 0 || entry.is_key) return;
     char full_path[256];
     uint32_t p = 0;
@@ -1012,7 +1012,7 @@ static void registry_action(void* context, GuiControl* control) {
     if (p && full_path[p - 1] != '/') full_path[p++] = '/';
     for (uint32_t i = 0; entry.name[i] && p + 1 < sizeof(full_path); i++) full_path[p++] = entry.name[i];
     full_path[p] = '\0';
-    GuiControl* edit = &desktop.windows[registry_window].controls[1];
+    GuiControl* edit = &gui_window_find(&desktop, registry_window)->controls[1];
     if (entry.type == 2) sys_reg_set_str(full_path, edit->text);
     else {
         uint32_t value;
@@ -1032,7 +1032,7 @@ static void open_registry(void) {
     gui_control_add(&desktop, id, GUI_BUTTON, 558, 3, 64, 26, "Up");
     gui_control_add(&desktop, id, GUI_BUTTON, 630, 3, 74, 26, "Apply");
     registry_value_control = gui_control_add(&desktop, id, GUI_LIST, 12, 38, 690, 426, "");
-    desktop.windows[id].action = registry_action;
+    gui_window_find(&desktop, id)->action = registry_action;
     gui_window_set_list_action(&desktop, id, registry_select, NULL);
     registry_refresh();
 }
@@ -1084,7 +1084,7 @@ static void font_select(void* context, GuiControl* control) {
 static void font_apply(void* context, GuiControl* control) {
     (void)context;
     (void)control;
-    GuiControl* size_field = &desktop.windows[font_window].controls[3];
+    GuiControl* size_field = &gui_window_find(&desktop, font_window)->controls[3];
     uint32_t point_size = 12;
     if (parse_u32(size_field->text, &point_size) != 0 || point_size < 6 || point_size > 36) return;
     uint32_t scale = (point_size + 5) / 6;
@@ -1116,15 +1116,15 @@ static void open_fonts(void) {
     gui_control_add(&desktop, id, GUI_TEXTFIELD, 132, 360, 56, 26, size_text);
     gui_control_add(&desktop, id, GUI_BUTTON, 430, 364, 100, 28, "Apply");
     gui_window_set_list_action(&desktop, id, font_select, NULL);
-    desktop.windows[id].action = font_apply;
+    gui_window_find(&desktop, id)->action = font_apply;
     load_fonts();
 }
 
 static void settings_apply(void* context, GuiControl* control) {
     (void)control;
     int window_id = (int)(intptr_t)context;
-    if (window_id < 0 || window_id >= GUI_MAX_WINDOWS || !desktop.windows[window_id].used) return;
-    GuiWindow* window = &desktop.windows[window_id];
+    if (window_id < 0 || window_id >= GUI_MAX_WINDOWS || !gui_window_find(&desktop, window_id)->used) return;
+    GuiWindow* window = gui_window_find(&desktop, window_id);
     if (control->text[0] == 'A') {
         uint32_t background;
         uint32_t accent;
@@ -1231,13 +1231,13 @@ static void open_settings(void) {
         gui_control_add(&desktop, id, GUI_TEXTFIELD, 430, 206 + (int)i * 32, 180, 26, start_menu_label);
     }
     gui_control_add(&desktop, id, GUI_BUTTON, 300, 300, 100, 28, "Save All");
-    desktop.windows[id].action = settings_apply;
-    desktop.windows[id].action_context = (void*)(intptr_t)id;
+    gui_window_find(&desktop, id)->action = settings_apply;
+    gui_window_find(&desktop, id)->action_context = (void*)(intptr_t)id;
 }
 
 static void animate_window_open(int id, int offset_x, int offset_y) {
-    if (id < 0 || id >= GUI_MAX_WINDOWS || !desktop.windows[id].used) return;
-    GuiWindow* window = &desktop.windows[id];
+    if (id < 0 || id >= GUI_MAX_WINDOWS || !gui_window_find(&desktop, id)->used) return;
+    GuiWindow* window = gui_window_find(&desktop, id);
     int from_x = window->x + offset_x;
     int from_y = window->y + offset_y;
     window->x = from_x;
@@ -1276,8 +1276,8 @@ static void window_context(void* context, int x, int y) {
 
 static void window_context_action(void* context, int item) {
     int id = (int)(intptr_t)context;
-    if (id < 0 || id >= GUI_MAX_WINDOWS || !desktop.windows[id].used) return;
-    GuiWindow* window = &desktop.windows[id];
+    if (id < 0 || id >= GUI_MAX_WINDOWS || !gui_window_find(&desktop, id)->used) return;
+    GuiWindow* window = gui_window_find(&desktop, id);
     if (item == 0) {
         window->minimized = 1;
         window->visible = 0;
@@ -1309,8 +1309,8 @@ static void register_window_context(int id) {
 }
 
 static void notify_window_client(int window_id, int input_type, int input_key, int x, int y) {
-    if (window_id < 0 || window_id >= GUI_MAX_WINDOWS || !desktop.windows[window_id].used) return;
-    GuiWindow* window = &desktop.windows[window_id];
+    if (window_id < 0 || window_id >= GUI_MAX_WINDOWS || !gui_window_find(&desktop, window_id)->used) return;
+    GuiWindow* window = gui_window_find(&desktop, window_id);
     if (window->owner_pid <= 0) return;
     UserWindowMessage event = {0};
     event.type = USER_WINDOW_MSG_INPUT;
@@ -1323,8 +1323,8 @@ static void notify_window_client(int window_id, int input_type, int input_key, i
 }
 
 static void close_owned_window(int window_id) {
-    if (window_id < 0 || window_id >= GUI_MAX_WINDOWS || !desktop.windows[window_id].used) return;
-    GuiWindow* window = &desktop.windows[window_id];
+    if (window_id < 0 || window_id >= GUI_MAX_WINDOWS || !gui_window_find(&desktop, window_id)->used) return;
+    GuiWindow* window = gui_window_find(&desktop, window_id);
     if (window->owner_pid > 0) {
         UserWindowMessage event = {0};
         event.type = USER_WINDOW_MSG_CLOSE;
@@ -1373,6 +1373,7 @@ int main(int argc, char** argv, char** envp) {
         uint32_t now_ms = sys_ticks();
         UserWindowMessage incoming;
         while (sys_window_recv(&incoming) == 0) {
+            print("desktop: received message.\n");
             WindowServerMessage request = {0};
             request.type = incoming.type;
             request.window_id = incoming.window_id;
@@ -1414,27 +1415,27 @@ int main(int argc, char** argv, char** envp) {
         int dragging_window = -1;
         int drag_width = 0;
         int drag_height = 0;
-        for (int i = 0; i < GUI_MAX_WINDOWS; i++) {
-            if (desktop.windows[i].used && desktop.windows[i].dragging) {
-                dragging_window = i;
-                drag_width = desktop.windows[i].width;
-                drag_height = desktop.windows[i].height;
+        for (GuiWindowNode* n = desktop.windows; n; n = n->next) {
+            if (n->w.used && n->w.dragging) {
+                dragging_window = n->id;
+                drag_width = n->w.width;
+                drag_height = n->w.height;
                 break;
             }
         }
         if (dragging_window >= 0 && !drag_initialized) {
             gui_desktop_draw_excluding(&desktop, dragging_window);
             render_drag_capture();
-            drag_present_x = desktop.windows[dragging_window].x;
-            drag_present_y = desktop.windows[dragging_window].y;
+            drag_present_x = gui_window_find(&desktop, dragging_window)->x;
+            drag_present_y = gui_window_find(&desktop, dragging_window)->y;
             last_drag_present_ms = now_ms;
             drag_initialized = 1;
         }
         int changed = gui_desktop_poll(&desktop);
-        int drag_active = dragging_window >= 0 && desktop.windows[dragging_window].dragging;
-        int drag_ended = dragging_window >= 0 && !desktop.windows[dragging_window].dragging && drag_initialized;
+        int drag_active = dragging_window >= 0 && gui_window_find(&desktop, dragging_window)->dragging;
+        int drag_ended = dragging_window >= 0 && !gui_window_find(&desktop, dragging_window)->dragging && drag_initialized;
         if (dragging_window >= 0 && now_ms - last_drag_present_ms >= 16) {
-            GuiWindow* drag_window = &desktop.windows[dragging_window];
+            GuiWindow* drag_window = gui_window_find(&desktop, dragging_window);
             render_drag_restore_union(drag_present_x, drag_present_y,
                                       drag_window->x, drag_window->y,
                                       drag_width, drag_height);
@@ -1446,7 +1447,7 @@ int main(int argc, char** argv, char** envp) {
             drag_present_y = drag_window->y;
             last_drag_present_ms = now_ms;
         }
-        if (dragging_window < 0 || !desktop.windows[dragging_window].dragging) {
+        if (dragging_window < 0 || !gui_window_find(&desktop, dragging_window)->dragging) {
             drag_initialized = 0;
         }
         if (desktop.mouse_x != old_mouse_x || desktop.mouse_y != old_mouse_y) {
@@ -1468,5 +1469,6 @@ int main(int argc, char** argv, char** envp) {
         if (dragging_window < 0 || drag_ended) {
             drag_initialized = 0;
         }
+        //sys_yield();
     }
 }

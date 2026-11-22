@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 
-#define GUI_MAX_WINDOWS 8
+#define GUI_MAX_WINDOWS 10
 #define GUI_MAX_CONTROLS 16
 #define GUI_MAX_GROUPS 8
 #define GUI_MAX_ANIMATIONS 16
@@ -133,6 +133,12 @@ typedef struct {
     uint32_t control_count;
 } GuiWindow;
 
+typedef struct GuiWindowNode {
+    GuiWindow w;
+    int id;                                // стабильный id (не индекс)
+    struct GuiWindowNode* next;
+} GuiWindowNode;
+
 typedef struct {
     uint32_t width;
     uint32_t height;
@@ -164,7 +170,9 @@ typedef struct {
     int remote_mode;
     GuiAnimation animations[GUI_MAX_ANIMATIONS];
     uint32_t animation_count;
-    GuiWindow windows[GUI_MAX_WINDOWS];
+    GuiWindowNode* windows;
+    uint32_t window_count;
+    int next_window_id;
 } GuiDesktop;
 
 typedef struct {
@@ -231,5 +239,8 @@ void gui_desktop_handle_pointer(GuiDesktop* desktop, int x, int y, uint32_t butt
 int gui_desktop_poll(GuiDesktop* desktop);
 void gui_desktop_draw_excluding(GuiDesktop* desktop, int excluded_window);
 void gui_desktop_draw_window(GuiDesktop* desktop, int window_id);
+GuiWindow* gui_window_find(GuiDesktop* desktop, int window_id);
+int gui_window_id(const GuiDesktop* desktop, const GuiWindow* w);
+
 
 #endif
