@@ -18,6 +18,7 @@
 #include <serial/serial.h>
 #include <tasking/process.h>
 #include <tasking/scheduler.h>
+#include <mutex.h>
 #include <stddef.h>
 #include <str.h>
 
@@ -53,6 +54,7 @@ static WindowIpcSlot window_ipc_queue[WINDOW_IPC_MAX];
 static uint32_t window_ipc_head;
 static uint32_t window_ipc_count;
 static int window_server_pid = -1;
+static mutex_t g_window_ipc_mutex = MUTEX_INIT;
 
 static void window_ipc_cleanup_process(int pid) {
     if (pid <= 0) return;
@@ -446,11 +448,17 @@ uint64_t syscall_handler(SyscallContext* ctx) {
             if (!sender || sender->pid == window_server_pid ||
                 copy_from_user(&message, (const void*)ctx->rdi, sizeof(message)) != 0 ||
                 message.payload_size > WINDOW_IPC_PAYLOAD) return (uint64_t)-1;
+
             if (message.payload_size < WINDOW_IPC_PAYLOAD) {
                 memset(message.payload + message.payload_size, 0,
                     WINDOW_IPC_PAYLOAD - message.payload_size);
             }
-            if (window_server_pid < 0) return (uint64_t)-1;
+
+            mutex_lock(&g_window_ipc_mutex);
+            if (window_server_pid < 0) {
+                mutex_unlock(&g_window_ipc_mutex);
+                return (uint64_t)-1;
+            }
             if (window_ipc_count >= WINDOW_IPC_MAX) {
                 window_ipc_head = (window_ipc_head + 1) % WINDOW_IPC_MAX;
                 window_ipc_count--;
@@ -461,22 +469,32 @@ uint64_t syscall_handler(SyscallContext* ctx) {
             message.owner_pid = sender->pid;
             window_ipc_queue[slot].message = message;
             window_ipc_count++;
+
+            Process* server = process_get_by_pid(window_server_pid);
+            if (server && server->state == PROC_SLEEPING) {
+                scheduler_wakeup(server);
+            }
+            mutex_unlock(&g_window_ipc_mutex);
             return 0;
         }
         case SYS_WINDOW_RECV: {
             Process* receiver = process_get_current();
             if (!receiver) return (uint64_t)-1;
             for (;;) {
+                mutex_lock(&g_window_ipc_mutex);
                 for (uint32_t i = 0; i < window_ipc_count; i++) {
                     uint32_t index = (window_ipc_head + i) % WINDOW_IPC_MAX;
                     WindowIpcSlot* slot = &window_ipc_queue[index];
                     if (slot->recipient_pid != receiver->pid) continue;
+
                     WindowIpcMessage message = slot->message;
                     if (message.payload_size < WINDOW_IPC_PAYLOAD) {
                         memset(message.payload + message.payload_size, 0,
-                               WINDOW_IPC_PAYLOAD - message.payload_size);
+                            WINDOW_IPC_PAYLOAD - message.payload_size);
                     }
-                    if (copy_to_user((void*)(uintptr_t)ctx->rdi, &message, sizeof(message)) != 0) {
+                    if (copy_to_user((void*)(uintptr_t)ctx->rdi, &message,
+                                    sizeof(message)) != 0) {
+                        mutex_unlock(&g_window_ipc_mutex);
                         return (uint64_t)-1;
                     }
                     for (uint32_t j = i; j + 1 < window_ipc_count; j++) {
@@ -486,10 +504,15 @@ uint64_t syscall_handler(SyscallContext* ctx) {
                     }
                     window_ipc_count--;
                     window_ipc_head = 0;
+                    mutex_unlock(&g_window_ipc_mutex);
                     return 0;
                 }
-                if (receiver->pid == window_server_pid) return (uint64_t)-1;
-                __asm__ volatile("sti; hlt; cli" ::: "memory");
+                if (receiver->pid == window_server_pid) {
+                    mutex_unlock(&g_window_ipc_mutex);
+                    return (uint64_t)-1;
+                }
+                mutex_unlock(&g_window_ipc_mutex);
+                scheduler_sleep();
             }
         }
         case SYS_WINDOW_REPLY: {
@@ -505,6 +528,7 @@ uint64_t syscall_handler(SyscallContext* ctx) {
             }
             Process* client = process_get_by_pid(client_pid);
             if (!client || !client->as || window_ipc_count >= WINDOW_IPC_MAX) return (uint64_t)-1;
+            if (client && client->state == PROC_SLEEPING) scheduler_wakeup(client);
             uint32_t slot = (window_ipc_head + window_ipc_count) % WINDOW_IPC_MAX;
             window_ipc_queue[slot].sender_pid = sender->pid;
             window_ipc_queue[slot].recipient_pid = client_pid;
