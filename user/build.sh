@@ -18,7 +18,7 @@ build_program() {
         -mno-red-zone -fno-stack-protector \
         -mno-sse -mno-sse2 -mno-mmx -I"$USER_DIR"
     ld -m elf_x86_64 -T "$USER_DIR/linker.ld" -o "$BUILD/$output.ELF" \
-        "$BUILD/_start.o" "$BUILD/$output.o" "$BUILD/libc.o"
+        "$BUILD/_start.o" "$BUILD/$output.o" "$BUILD/libc.o" "$BUILD/malloc.o"
 }
 
 build_gui_program() {
@@ -41,10 +41,14 @@ build_gui_program() {
         -mno-red-zone -fno-stack-protector \
         -mno-sse -mno-sse2 -mno-mmx
     ld -m elf_x86_64 -T "$USER_DIR/linker.ld" -o "$BUILD/$output.ELF" \
-        "$BUILD/_start.o" "$BUILD/$output.o" "$BUILD/gui.o" "$BUILD/render.o" "$BUILD/user_font.o" "$BUILD/libc.o"
+        "$BUILD/_start.o" "$BUILD/$output.o" "$BUILD/gui.o" "$BUILD/render.o" "$BUILD/user_font.o" "$BUILD/libc.o" "$BUILD/malloc.o"
 }
 
 x86_64-linux-gnu-gcc -c -O0 -o "$BUILD/libc.o" "$USER_DIR/libc.c" \
+    -ffreestanding -nostdlib -fno-pic -fno-pie \
+    -mno-red-zone -fno-stack-protector \
+    -mno-sse -mno-sse2 -mno-mmx -I"$USER_DIR"
+x86_64-linux-gnu-gcc -c -O0 -o "$BUILD/malloc.o" "$USER_DIR/malloc.c" \
     -ffreestanding -nostdlib -fno-pic -fno-pie \
     -mno-red-zone -fno-stack-protector \
     -mno-sse -mno-sse2 -mno-mmx -I"$USER_DIR"
@@ -72,7 +76,7 @@ x86_64-linux-gnu-gcc -c -O0 -o "$BUILD/zip.o" "$USER_DIR/zip.c" \
     -mno-red-zone -fno-stack-protector \
     -mno-sse -mno-sse2 -mno-mmx -I"$USER_DIR"
 ld -m elf_x86_64 -T "$USER_DIR/linker.ld" -o "$BUILD/PKG.ELF" \
-    "$BUILD/_start.o" "$BUILD/PKG.o" "$BUILD/zip.o" "$BUILD/libc.o"
+    "$BUILD/_start.o" "$BUILD/PKG.o" "$BUILD/zip.o" "$BUILD/libc.o" "$BUILD/malloc.o"
 
 DESKTOP_DIR=$USER_DIR/desktop
 x86_64-linux-gnu-gcc -c -O0 -o "$BUILD/DESKTOP.o" "$DESKTOP_DIR/desktop.c" \
@@ -96,7 +100,7 @@ x86_64-linux-gnu-gcc -c -O0 -o "$BUILD/user_font.o" kernel/graphics/font_8x8.c \
     -mno-red-zone -fno-stack-protector \
     -mno-sse -mno-sse2 -mno-mmx
 ld -m elf_x86_64 -T "$USER_DIR/linker.ld" -o "$BUILD/DESKTOP.ELF" \
-    "$BUILD/_start.o" "$BUILD/DESKTOP.o" "$BUILD/gui.o" "$BUILD/render.o" "$BUILD/window_server.o" "$BUILD/user_font.o" "$BUILD/libc.o"
+    "$BUILD/_start.o" "$BUILD/DESKTOP.o" "$BUILD/gui.o" "$BUILD/render.o" "$BUILD/window_server.o" "$BUILD/user_font.o" "$BUILD/libc.o" "$BUILD/malloc.o"
 
 if [[ "$INSTALL_TO_DISK" == "--install-disk" ]]; then
     MOUNT_DIR=$(mktemp -d)
