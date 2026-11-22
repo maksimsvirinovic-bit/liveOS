@@ -106,6 +106,23 @@ static uint64_t scheduler_switch(uint64_t old_rsp) {
     return next->saved_rsp;
 }
 
+static uint64_t scheduler_switch_to(uint64_t old_rsp, Process* next) {
+    Process* current = process_get_current();
+    if (!next || next == current) return old_rsp;
+
+    if (current) current->saved_rsp = old_rsp;
+
+    if (next->as) paging_switch(next->as->pml4_phys);
+    if (next->kstack_top) {
+        tss_set_rsp0(next->kstack_top);
+        percpu_get(0)->kstack_top = next->kstack_top;
+    }
+    process_set_current(next);
+    next->last_run = g_tick_counter;
+
+    return next->saved_rsp;
+}
+
 #define VRUNTIME_SHIFT  20
 #define VRUNTIME_ONE    (1ULL << VRUNTIME_SHIFT)
 
@@ -115,14 +132,18 @@ uint64_t scheduler_tick(uint64_t old_rsp) {
     Process* current = process_get_current();
     if (!current) return old_rsp;
 
+    if (current->state == PROC_SLEEPING) {
+        Process* next = scheduler_pick_next_excluding(current);
+        if (!next) next = g_idle;
+        if (!next || next == current) return old_rsp;
+        return scheduler_switch_to(old_rsp, next);
+    }
+
     uint64_t delta = g_tick_counter - current->last_run;
     if (delta == 0) delta = 1;
     current->vruntime += ((uint64_t)delta * NICE_0_WEIGHT * VRUNTIME_ONE) / current->weight;
     current->last_run = g_tick_counter;
-
-    if (current->vruntime < g_min_vruntime) {
-        g_min_vruntime = current->vruntime;
-    }
+    if (current->vruntime < g_min_vruntime) g_min_vruntime = current->vruntime;
 
     if (!current->preemptible && !g_force_switch) {
         current->need_resched = 1;
@@ -130,9 +151,11 @@ uint64_t scheduler_tick(uint64_t old_rsp) {
     }
 
     Process* next = scheduler_pick_next_excluding(current);
-    if (!next) return old_rsp;
-    return scheduler_switch(old_rsp);
+    if (!next) next = g_idle;
+    if (!next || next == current) return old_rsp;
+    return scheduler_switch_to(old_rsp, next);
 }
+
 void scheduler_yield(void) {
     g_force_switch = 1;
     __asm__ volatile("int $0x20");
