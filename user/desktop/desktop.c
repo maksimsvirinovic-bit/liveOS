@@ -1,8 +1,7 @@
-#include <stdio.h>
 #include "../sys.h"
-#include "gui.h"
-#include "render.h"
-#include "window_server.h"
+#include "gui_addon/gui.h"
+#include "gui_addon/render.h"
+#include "gui_addon/window_server.h"
 
 #define COLOR_BACKGROUND 0x00151B26u
 #define COLOR_MUTED 0x0096A8B5u
@@ -30,19 +29,8 @@ static int font_window = -1;
 static int font_list_control = -1;
 static char font_entries[GUI_LIST_ITEMS][64];
 static uint32_t font_entry_count;
-static char files_path[FILE_PATH_MAX] = "/";
-static char files_names[GUI_LIST_CAPACITY][64];
-static uint8_t files_attrs[GUI_LIST_CAPACITY];
-static uint32_t files_count;
-static int files_window = -1;
-static int files_path_control = -1;
-static int files_list_control = -1;
-static int files_status_control = -1;
-static uint32_t last_file_click_index = 0xFFFFFFFFu;
-static uint32_t last_file_click_ticks;
 static char file_context_commands[GUI_CONTEXT_ITEMS][128];
 static char file_context_labels[GUI_CONTEXT_ITEMS][64];
-static uint32_t file_context_count;
 static char context_target_path[FILE_PATH_MAX];
 static int script_window = -1;
 static int script_text_control = -1;
@@ -55,16 +43,9 @@ static int terminal_window = -1;
 static int terminal_output_control = -1;
 static char terminal_output[TERMINAL_TEXT_MAX];
 
-static void notepad_action(void* context, GuiControl* control);
-static void open_notes(void);
-static int load_note(void);
 static void open_registry(void);
 static void open_settings(void);
 static void open_fonts(void);
-static void show_files(void);
-static void files_context(void* context, int x, int y);
-static void files_context_action(void* context, int item);
-static void files_window_context_action(void* context, int item);
 static void window_context(void* context, int x, int y);
 static void window_context_action(void* context, int item);
 static void register_window_context(int window_id);
@@ -333,28 +314,6 @@ static void terminal_closed(void* context) {
     terminal_output_control = -1;
 }
 
-static void files_closed(void* context) {
-    (void)context;
-    files_path[0] = '/'; files_path[1] = '\0';
-    files_count = 0;
-    files_window = files_path_control = files_list_control = files_status_control = -1;
-    file_context_count = 0;
-    context_target_path[0] = '\0';
-    last_file_click_index = 0xFFFFFFFFu;
-    last_file_click_ticks = 0;
-    for (uint32_t i = 0; i < GUI_LIST_CAPACITY; i++) files_names[i][0] = '\0';
-    for (uint32_t i = 0; i < GUI_CONTEXT_ITEMS; i++) {
-        file_context_commands[i][0] = '\0';
-        file_context_labels[i][0] = '\0';
-    }
-}
-
-static void notes_closed(void* context) {
-    (void)context;
-    note_path[0] = '\0';
-    note_window = note_path_control = note_text_control = note_status_control = -1;
-}
-
 static void script_closed(void* context) {
     (void)context;
     script_source[0] = '\0';
@@ -374,16 +333,9 @@ static void settings_closed(void* context) {
     settings_window = -1;
 }
 
-static void fonts_closed(void* context) {
-    (void)context;
-    font_window = font_list_control = -1;
-    font_entry_count = 0;
-    font_path[0] = '\0';
-    for (uint32_t i = 0; i < GUI_LIST_ITEMS; i++) font_entries[i][0] = '\0';
-}
 
 static void show_desktop_window(int* window_id, void (*open_window)(void)) {
-    if (*window_id < 0 || *window_id >= GUI_MAX_WINDOWS || !gui_window_find(&desktop, *window_id)->used) {
+    if (*window_id < 0 || *window_id >= GUI_MAX_WINDOWS || !gui_window_find(&desktop, *window_id) || !gui_window_find(&desktop, *window_id)->used) {
         *window_id = -1;
         open_window();
         return;
@@ -395,6 +347,7 @@ static void show_desktop_window(int* window_id, void (*open_window)(void)) {
         previous->focus_action(previous->focus_context, 0);
     }
     GuiWindow* window = gui_window_find(&desktop, *window_id);
+    if (!window) return;
     window->visible = 1;
     window->minimized = 0;
     window->z = desktop.next_z++;
@@ -430,167 +383,6 @@ static int terminal_refresh(void) {
     return changed;
 }
 
-static void open_fonts(void);
-
-static int join_path(char* output, uint32_t capacity, const char* directory, const char* name) {
-    uint32_t length = 0;
-    while (directory[length] && length + 1 < capacity) {
-        output[length] = directory[length];
-        length++;
-    }
-    if (length && output[length - 1] != '/' && length + 1 < capacity) output[length++] = '/';
-    uint32_t index = 0;
-    while (name[index] && length + 1 < capacity) output[length++] = name[index++];
-    output[length] = '\0';
-    return name[index] ? -1 : 0;
-}
-
-static int normalize_files_path(const char* input, char* output, uint32_t capacity) {
-    char joined[FILE_PATH_MAX * 2];
-    uint32_t output_length = 1;
-    uint32_t segment_starts[64];
-    uint32_t depth = 0;
-    if (!input || !input[0]) return -1;
-    if (input[0] == '/') {
-        copy_text(joined, sizeof(joined), input);
-    } else {
-        if (join_path(joined, sizeof(joined), files_path, input) != 0) return -1;
-    }
-    if (capacity < 2) return -1;
-    output[0] = '/';
-    output[1] = '\0';
-    uint32_t cursor = 0;
-    while (joined[cursor]) {
-        while (joined[cursor] == '/') cursor++;
-        uint32_t start = cursor;
-        while (joined[cursor] && joined[cursor] != '/') cursor++;
-        uint32_t part_length = cursor - start;
-        if (!part_length) break;
-        if (part_length == 1 && joined[start] == '.') continue;
-        if (part_length == 2 && joined[start] == '.' && joined[start + 1] == '.') {
-            if (depth) {
-                output_length = segment_starts[--depth];
-                output[output_length] = '\0';
-            }
-            continue;
-        }
-        uint32_t separator = output_length > 1 ? 1 : 0;
-        if (depth >= sizeof(segment_starts) / sizeof(segment_starts[0]) ||
-            output_length + separator + part_length + 1 > capacity) return -1;
-        segment_starts[depth++] = output_length;
-        if (separator) output[output_length++] = '/';
-        for (uint32_t i = 0; i < part_length; i++) output[output_length++] = joined[start + i];
-        output[output_length] = '\0';
-    }
-    return 0;
-}
-
-static void files_status(const char* message) {
-    if (files_window >= 0 && files_status_control >= 0) {
-        copy_text(gui_window_find(&desktop, files_window)->controls[files_status_control].text,
-                  sizeof(gui_window_find(&desktop, files_window)->controls[files_status_control].text), message);
-    }
-}
-
-static void files_refresh(void) {
-    if (files_window < 0) return;
-    GuiWindow* window = gui_window_find(&desktop, files_window);
-    GuiControl* list = &window->controls[files_list_control];
-    copy_text(window->controls[files_path_control].text,
-              sizeof(window->controls[files_path_control].text), files_path);
-    list->item_count = 0;
-    list->selected = -1;
-    list->scroll = 0;
-    files_count = 0;
-    for (uint32_t i = 0; i < GUI_LIST_CAPACITY; i++) {
-        files_names[i][0] = '\0';
-        files_attrs[i] = 0;
-        list->items[i][0] = '\0';
-    }
-    int fd = sys_opendir(files_path);
-    if (fd < 0) { files_status("Cannot open directory"); return; }
-    for (uint32_t i = 0; i < GUI_LIST_CAPACITY; i++) {
-        DirEntry entry;
-        if (sys_readdir(fd, i, &entry) != 0) break;
-        copy_text(files_names[i], sizeof(files_names[i]), entry.name);
-        files_attrs[i] = entry.attr;
-        char display[GUI_LIST_TEXT_MAX];
-        display[0] = (entry.attr & FS_ATTR_DIR) ? '[' : ' ';
-        display[1] = (entry.attr & FS_ATTR_DIR) ? 'D' : ' ';
-        display[2] = (entry.attr & FS_ATTR_DIR) ? ']' : ' ';
-        display[3] = ' ';
-        copy_text(display + 4, sizeof(display) - 4, entry.name);
-        gui_list_set_item(&desktop, files_window, files_list_control, i, display);
-        files_count++;
-    }
-    sys_close(fd);
-    files_status(files_count == GUI_LIST_CAPACITY ? "Showing first 256 entries" :
-                 files_count ? "Enter/double click open" : "Empty directory");
-}
-
-static void open_file_path(const char* path) {
-    const char* basename = path;
-    for (uint32_t i = 0; path[i]; i++) if (path[i] == '/') basename = path + i + 1;
-    const char* dot = NULL;
-    for (uint32_t i = 0; basename[i]; i++) if (basename[i] == '.') dot = basename + i + 1;
-    char extension[16] = {0};
-    if (dot) {
-        uint32_t i = 0;
-        while (dot[i] && i + 1 < sizeof(extension)) {
-            char c = dot[i];
-            extension[i] = c >= 'a' && c <= 'z' ? (char)(c - 'a' + 'A') : c;
-            i++;
-        }
-    }
-    if ((extension[0] == 'U' && extension[1] == 'I') ||
-        (extension[0] == 'S' && extension[1] == 'C' && extension[2] == 'R')) {
-        if (load_ui_script(path) != 0) files_status("Cannot open UI script");
-        return;
-    }
-    char key[64] = "USER/quickopen/";
-    uint32_t p = 15;
-    for (uint32_t i = 0; extension[i] && p + 1 < sizeof(key); i++) key[p++] = extension[i];
-    key[p] = '\0';
-    char program[128] = {0};
-    int found = extension[0] && sys_reg_get_str(key, program, sizeof(program)) > 0;
-    if (!found && (extension[0] == 'T' && extension[1] == 'T' && extension[2] == 'F')) {
-        open_fonts();
-        return;
-    }
-    if (!found && (extension[0] == 'O' && extension[1] == 'T' && extension[2] == 'F')) {
-        open_fonts();
-        return;
-    }
-    if ((!found || program[0] == '@') && extension[0] == 'E' && extension[1] == 'L' && extension[2] == 'F') {
-        int pid = sys_fork();
-        if (pid == 0) {
-            char* argv[] = { (char*)path, NULL };
-            char* envp[] = { NULL };
-            sys_exec(path, argv, envp);
-            sys_exit(127);
-        }
-        return;
-    }
-    if (found) {
-        if (program[0] != '/') {
-            char absolute[160] = "/bin/";
-            copy_text(absolute + 5, sizeof(absolute) - 5, program);
-            copy_text(program, sizeof(program), absolute);
-        }
-        int pid = sys_fork();
-        if (pid == 0) {
-            char* argv[] = { program, (char*)path, NULL };
-            char* envp[] = { NULL };
-            sys_exec(program, argv, envp);
-            sys_exit(127);
-        }
-        return;
-    }
-    note_window = -1;
-    copy_text(note_path, sizeof(note_path), path);
-    open_notes();
-    load_note();
-}
 
 static int file_type_name(const char* extension, char* output, uint32_t capacity) {
     const char* type = "TEXT";
@@ -601,221 +393,6 @@ static int file_type_name(const char* extension, char* output, uint32_t capacity
     else if (text_equal(extension, "ELF") || text_equal(extension, "APP")) type = "APPLICATION";
     copy_text(output, capacity, type);
     return 0;
-}
-
-static void files_add_registry_actions(const char* key) {
-    if (file_context_count >= GUI_CONTEXT_ITEMS) return;
-    for (uint32_t index = 0; index < GUI_CONTEXT_ITEMS; index++) {
-        UserRegEntry entry;
-        if (sys_reg_enum(key, index, &entry) != 0) break;
-        if (entry.is_key || !entry.text[0] || file_context_count >= GUI_CONTEXT_ITEMS) continue;
-        copy_text(file_context_commands[file_context_count], sizeof(file_context_commands[0]), entry.text);
-        copy_text(file_context_labels[file_context_count], sizeof(file_context_labels[0]), entry.name);
-        file_context_count++;
-    }
-}
-
-static void files_context(void* context, int x, int y) {
-    (void)context;
-    if (files_window < 0 || !gui_window_find(&desktop, files_window)->used) return;
-    if (x < gui_window_find(&desktop, files_window)->x + 10 ||
-        x >= gui_window_find(&desktop, files_window)->x + 600 ||
-        y < gui_window_find(&desktop, files_window)->y + 24 + 38 ||
-        y >= gui_window_find(&desktop, files_window)->y + 24 + 396) {
-        static const char* window_items[] = { "Minimize", "Maximize / Restore", "Close" };
-        gui_context_menu_show(&desktop, x, y, window_items, 3, files_window,
-                              files_window_context_action, NULL);
-        return;
-    }
-    GuiControl* list = &gui_window_find(&desktop, files_window)->controls[files_list_control];
-    int row = (y - (gui_window_find(&desktop, files_window)->y + 24 + 40)) / 16;
-    int index = list->scroll + row;
-    if (row < 0 || index < 0 || (uint32_t)index >= files_count || !files_names[index][0]) return;
-    list->selected = index;
-    char candidate[FILE_PATH_MAX];
-    if (join_path(candidate, sizeof(candidate), files_path, files_names[index]) != 0 ||
-        normalize_files_path(candidate, context_target_path, sizeof(context_target_path)) != 0) return;
-    const char* basename = files_names[index];
-    const char* dot = NULL;
-    for (uint32_t i = 0; basename[i]; i++) if (basename[i] == '.') dot = basename + i + 1;
-    char extension[16] = {0};
-    if (dot) {
-        for (uint32_t i = 0; dot[i] && i + 1 < sizeof(extension); i++) {
-            char c = dot[i];
-            extension[i] = c >= 'a' && c <= 'z' ? (char)(c - 'a' + 'A') : c;
-        }
-    }
-    char type[24];
-    file_type_name(extension, type, sizeof(type));
-    file_context_count = 0;
-    char key[96] = "USER/context/ext/";
-    copy_text(key + 17, sizeof(key) - 17, extension);
-    if (extension[0]) files_add_registry_actions(key);
-    copy_text(key, sizeof(key), "USER/context/type/");
-    copy_text(key + 18, sizeof(key) - 18, type);
-    files_add_registry_actions(key);
-    files_add_registry_actions("USER/context/global");
-    if ((extension[0] == 'U' && extension[1] == 'I') ||
-        (extension[0] == 'S' && extension[1] == 'C' && extension[2] == 'R')) {
-        if (file_context_count < GUI_CONTEXT_ITEMS) {
-            copy_text(file_context_commands[file_context_count], sizeof(file_context_commands[0]), "@run-ui");
-            copy_text(file_context_labels[file_context_count++], sizeof(file_context_labels[0]), "Run in UI Studio");
-        }
-    }
-    if (file_context_count < GUI_CONTEXT_ITEMS - 1) {
-        copy_text(file_context_commands[file_context_count], sizeof(file_context_commands[0]), "@open");
-        copy_text(file_context_labels[file_context_count++], sizeof(file_context_labels[0]), "Open");
-    }
-    if (!(files_attrs[row] & FS_ATTR_DIR) && file_context_count < GUI_CONTEXT_ITEMS) {
-        copy_text(file_context_commands[file_context_count], sizeof(file_context_commands[0]), "@delete");
-        copy_text(file_context_labels[file_context_count++], sizeof(file_context_labels[0]), "Delete");
-    }
-    const char* labels[GUI_CONTEXT_ITEMS];
-    for (uint32_t i = 0; i < file_context_count; i++) labels[i] = file_context_labels[i];
-    gui_context_menu_show(&desktop, x, y, labels, file_context_count, files_window,
-                         files_context_action, NULL);
-}
-
-static void files_window_context_action(void* context, int item) {
-    (void)context;
-    if (files_window < 0 || !gui_window_find(&desktop, files_window)->used) return;
-    GuiWindow* window = gui_window_find(&desktop, files_window);
-    if (item == 0) {
-        window->minimized = 1;
-        window->visible = 0;
-        desktop.focused_window = -1;
-    } else if (item == 1) {
-        window->maximized = !window->maximized;
-        if (window->maximized) {
-            window->normal_x = window->x;
-            window->normal_y = window->y;
-            window->normal_width = window->width;
-            window->normal_height = window->height;
-            window->x = 0;
-            window->y = 0;
-            window->width = (int)desktop.width;
-            window->height = (int)desktop.height - 28;
-        } else {
-            window->x = window->normal_x;
-            window->y = window->normal_y;
-            window->width = window->normal_width;
-            window->height = window->normal_height;
-        }
-    } else if (item == 2) gui_window_destroy(&desktop, files_window);
-}
-
-static void files_context_action(void* context, int item) {
-    (void)context;
-    if (item < 0 || (uint32_t)item >= file_context_count) return;
-    if (files_window < 0 || !gui_window_find(&desktop, files_window)->used) return;
-    const char* command = file_context_commands[item];
-    if (text_equal(command, "@run-ui")) {
-        if (load_ui_script(context_target_path) != 0) files_status("Cannot run UI script");
-    } else if (text_equal(command, "@open")) {
-        int selected = gui_window_find(&desktop, files_window)->controls[files_list_control].selected;
-        if (selected < 0 || (uint32_t)selected >= files_count) return;
-        if (files_attrs[selected] & FS_ATTR_DIR) {
-            copy_text(files_path, sizeof(files_path), context_target_path);
-            files_refresh();
-        } else open_file_path(context_target_path);
-    } else if (text_equal(command, "@delete")) {
-        int selected = gui_window_find(&desktop, files_window)->controls[files_list_control].selected;
-        int result = (files_attrs[selected] & FS_ATTR_DIR) ? sys_rmdir(context_target_path) : sys_unlink(context_target_path);
-        files_status(result == 0 ? "Deleted" : "Delete failed");
-        files_refresh();
-    } else if (command[0]) {
-        char program[128];
-        copy_text(program, sizeof(program), command);
-        if (program[0] != '/') {
-            char absolute[160] = "/bin/";
-            copy_text(absolute + 5, sizeof(absolute) - 5, program);
-            copy_text(program, sizeof(program), absolute);
-        }
-        int pid = sys_fork();
-        if (pid == 0) {
-            char* argv[] = { program, context_target_path, NULL };
-            char* envp[] = { NULL };
-            sys_exec(program, argv, envp);
-            sys_exit(127);
-        }
-    }
-}
-
-static void files_activate(void* context, GuiControl* control) {
-    (void)context;
-    if (control->selected < 0 || (uint32_t)control->selected >= files_count) return;
-    uint32_t index = (uint32_t)control->selected;
-    char path[FILE_PATH_MAX];
-    char candidate[FILE_PATH_MAX];
-    if (join_path(candidate, sizeof(candidate), files_path, files_names[index]) != 0 ||
-        normalize_files_path(candidate, path, sizeof(path)) != 0) return;
-    if (files_attrs[index] & FS_ATTR_DIR) {
-        last_file_click_index = 0xFFFFFFFFu;
-        copy_text(files_path, sizeof(files_path), path);
-        files_refresh();
-        return;
-    }
-    open_file_path(path);
-}
-
-static void files_list_click(void* context, GuiControl* control) {
-    (void)context;
-    uint32_t now = sys_ticks();
-    if (control->selected >= 0 && (uint32_t)control->selected == last_file_click_index &&
-        now - last_file_click_ticks <= 50) {
-        files_activate(NULL, control);
-        last_file_click_index = 0xFFFFFFFFu;
-        last_file_click_ticks = 0;
-        return;
-    }
-    last_file_click_index = control->selected < 0 ? 0xFFFFFFFFu : (uint32_t)control->selected;
-    last_file_click_ticks = now;
-}
-
-static void files_action(void* context, GuiControl* control) {
-    (void)context;
-    if (control->text[0] == 'O') {
-        if (normalize_files_path(gui_window_find(&desktop, files_window)->controls[files_path_control].text,
-                                 files_path, sizeof(files_path)) != 0) {
-            files_status("Invalid path");
-            return;
-        }
-        files_refresh();
-    } else if (control->text[0] == 'U') {
-        uint32_t length = 0;
-        while (files_path[length]) length++;
-        while (length > 1 && files_path[length - 1] != '/') length--;
-        if (length > 1) files_path[length - 1] = '\0';
-        else copy_text(files_path, sizeof(files_path), "/");
-        files_refresh();
-    } else if (control->text[0] == 'N') {
-        char folder[FILE_PATH_MAX];
-        if (join_path(folder, sizeof(folder), files_path, "NewFolder") == 0 && sys_mkdir(folder) == 0) files_refresh();
-        else files_status("Create folder failed");
-    } else if (control->text[0] == 'D') {
-        GuiControl* list = &gui_window_find(&desktop, files_window)->controls[files_list_control];
-        int selected = list->selected;
-        if (selected < 0 || (uint32_t)selected >= files_count) return;
-        char path[FILE_PATH_MAX];
-        if (join_path(path, sizeof(path), files_path, files_names[selected]) != 0) return;
-        int result = (files_attrs[selected] & FS_ATTR_DIR) ? sys_rmdir(path) : sys_unlink(path);
-        files_status(result == 0 ? "Deleted" : "Delete failed");
-        files_refresh();
-    } else if (control->text[0] == 'S') {
-        sys_tty_focus(0);
-    }
-}
-
-static void files_key_action(void* context, int key) {
-    (void)context;
-    if (files_window < 0 || !gui_window_find(&desktop, files_window)->used || desktop.focused_window != files_window ||
-        key != '\n' || gui_window_find(&desktop, files_window)->focused_control != files_path_control) return;
-    GuiControl* path_control = &gui_window_find(&desktop, files_window)->controls[files_path_control];
-    if (normalize_files_path(path_control->text, files_path, sizeof(files_path)) != 0) {
-        files_status("Invalid path");
-        return;
-    }
-    files_refresh();
 }
 
 static void open_terminal(void) {
@@ -834,107 +411,12 @@ static void open_terminal(void) {
     terminal_refresh();
 }
 
-static void open_files(void) {
-    int id = gui_window_create(&desktop, "Files", 180, 110, 620, 470, NULL, NULL);
-    if (id < 0) return;
-    register_window_context(id);
-    files_window = id;
-    gui_window_set_close_action(&desktop, id, files_closed, NULL);
-    gui_control_add(&desktop, id, GUI_LABEL, 10, 8, 40, 16, "Path");
-    files_path_control = gui_control_add(&desktop, id, GUI_TEXTFIELD, 50, 4, 310, 24, files_path);
-    gui_control_add(&desktop, id, GUI_BUTTON, 368, 3, 64, 26, "Open");
-    gui_control_add(&desktop, id, GUI_BUTTON, 438, 3, 64, 26, "Up");
-    gui_control_add(&desktop, id, GUI_BUTTON, 508, 3, 72, 26, "New Dir");
-    files_list_control = gui_control_add(&desktop, id, GUI_LIST, 10, 38, 590, 358, "");
-    files_status_control = gui_control_add(&desktop, id, GUI_LABEL, 12, 404, 580, 16, "");
-    gui_window_set_list_action(&desktop, id, files_list_click, NULL);
-    gui_window_set_list_activate_action(&desktop, id, files_activate, NULL);
-    gui_window_set_context_action(&desktop, id, files_context, NULL);
-    gui_window_find(&desktop, id)->action = files_action;
-    files_refresh();
-}
-
-static void show_files(void) {
-    show_desktop_window(&files_window, open_files);
-}
-
 static void show_registry(void) {
     show_desktop_window(&registry_window, open_registry);
 }
 
 static void show_settings(void) {
     show_desktop_window(&settings_window, open_settings);
-}
-
-static void show_fonts(void) {
-    show_desktop_window(&font_window, open_fonts);
-}
-
-static void open_notes(void) {
-    int id = gui_window_create(&desktop, "Notepad", 300, 180, 610, 470, NULL, NULL);
-    if (id < 0) return;
-    register_window_context(id);
-    note_window = id;
-    gui_window_set_close_action(&desktop, id, notes_closed, NULL);
-    gui_control_add(&desktop, id, GUI_LABEL, 12, 8, 60, 16, "File");
-    note_path_control = gui_control_add(&desktop, id, GUI_TEXTFIELD, 54, 4, 300, 24, note_path);
-    gui_control_add(&desktop, id, GUI_BUTTON, 366, 3, 74, 26, "Load");
-    gui_control_add(&desktop, id, GUI_BUTTON, 448, 3, 74, 26, "Save");
-    gui_control_add(&desktop, id, GUI_TEXTAREA, 10, 36, 578, 372, "");
-    note_text_control = (int)gui_window_find(&desktop, id)->control_count - 1;
-    note_status_control = gui_control_add(&desktop, id, GUI_LABEL, 12, 414, 560, 16, "Ready");
-    gui_window_find(&desktop, id)->action = notepad_action;
-}
-
-static int load_note(void) {
-    if (note_window < 0 || note_path_control < 0 || note_text_control < 0) return -1;
-    GuiWindow* window = gui_window_find(&desktop, note_window);
-    copy_text(note_path, sizeof(note_path), window->controls[note_path_control].text);
-    int fd = sys_open(note_path, FS_READ);
-    if (fd < 0) {
-        copy_text(window->controls[note_status_control].text,
-                  sizeof(window->controls[note_status_control].text), "Open failed");
-        return -1;
-    }
-    GuiControl* text = &window->controls[note_text_control];
-    int count = sys_read(fd, text->text, NOTE_MAX);
-    sys_close(fd);
-    if (count < 0) {
-        copy_text(window->controls[note_status_control].text,
-                  sizeof(window->controls[note_status_control].text), "Read failed");
-        return -1;
-    }
-    text->text[count] = '\0';
-    copy_text(window->controls[note_status_control].text,
-              sizeof(window->controls[note_status_control].text), "Loaded");
-    return 0;
-}
-
-static int save_note(void) {
-    if (note_window < 0 || note_path_control < 0 || note_text_control < 0) return -1;
-    GuiWindow* window = gui_window_find(&desktop, note_window);
-    copy_text(note_path, sizeof(note_path), window->controls[note_path_control].text);
-    int fd = sys_open(note_path, FS_WRITE | FS_CREATE | FS_TRUNCATE);
-    if (fd < 0) {
-        copy_text(window->controls[note_status_control].text,
-                  sizeof(window->controls[note_status_control].text), "Save failed");
-        return -1;
-    }
-    const char* text = window->controls[note_text_control].text;
-    uint32_t length = 0;
-    while (text[length] && length < NOTE_MAX) length++;
-    int written = sys_write(fd, text, length);
-    sys_close(fd);
-    copy_text(window->controls[note_status_control].text,
-              sizeof(window->controls[note_status_control].text),
-              written == (int)length ? "Saved" : "Save failed");
-    return written == (int)length ? 0 : -1;
-}
-
-static void notepad_action(void* context, GuiControl* control) {
-    (void)context;
-    if (control->text[0] == 'L') load_note();
-    if (control->text[0] == 'S') save_note();
 }
 
 static void registry_refresh(void) {
@@ -1037,94 +519,12 @@ static void open_registry(void) {
     registry_refresh();
 }
 
-static void load_fonts(void) {
-    if (font_window < 0) return;
-    int fd = sys_opendir("/usr/fonts");
-    if (fd < 0) {
-        gui_list_set_item(&desktop, font_window, font_list_control, 0, "No /usr/fonts directory");
-        return;
-    }
-    uint32_t row = 0;
-    font_entry_count = 0;
-    for (uint32_t index = 0; index < 64 && row < GUI_LIST_ITEMS; index++) {
-        DirEntry entry;
-        if (sys_readdir(fd, index, &entry) != 0) break;
-        const char* name = entry.name;
-        uint32_t length = 0;
-        while (name[length]) length++;
-        if (length < 4) continue;
-        const char* extension = name + length - 4;
-        int ttf = (extension[0] == '.' && (extension[1] == 't' || extension[1] == 'T') &&
-               (extension[2] == 't' || extension[2] == 'T') &&
-               (extension[3] == 'f' || extension[3] == 'F'));
-        int otf = (extension[0] == '.' && (extension[1] == 'o' || extension[1] == 'O') &&
-               (extension[2] == 't' || extension[2] == 'T') &&
-               (extension[3] == 'f' || extension[3] == 'F'));
-        int supported = ttf || otf;
-        if (supported && row < GUI_LIST_ITEMS) {
-            copy_text(font_entries[row], sizeof(font_entries[row]), name);
-            gui_list_set_item(&desktop, font_window, font_list_control, row, name);
-            row++;
-        }
-    }
-    font_entry_count = row;
-    sys_close(fd);
-}
-
-static void font_select(void* context, GuiControl* control) {
-    (void)context;
-    int selected = control->selected;
-    if (selected < 0 || (uint32_t)selected >= font_entry_count) return;
-    int p = 0;
-    const char* prefix = "/usr/fonts/";
-    while (*prefix) font_path[p++] = *prefix++;
-    copy_text(font_path + p, sizeof(font_path) - (uint32_t)p, font_entries[selected]);
-}
-
-static void font_apply(void* context, GuiControl* control) {
-    (void)context;
-    (void)control;
-    GuiControl* size_field = &gui_window_find(&desktop, font_window)->controls[3];
-    uint32_t point_size = 12;
-    if (parse_u32(size_field->text, &point_size) != 0 || point_size < 6 || point_size > 36) return;
-    uint32_t scale = (point_size + 5) / 6;
-    if (scale > 6) scale = 6;
-    if (sys_reg_set_u32("USER/fonts/scale", scale) != 0) return;
-    sys_reg_set_u32("USER/fonts/size_pt", point_size);
-    render_set_font_scale(scale);
-    if (font_path[0]) sys_reg_set_str("USER/fonts/default", font_path);
-}
-
-static void open_fonts(void) {
-    sys_mkdir("/usr");
-    sys_mkdir("/usr/fonts");
-    int id = gui_window_create(&desktop, "Font Settings", 180, 90, 560, 450, NULL, NULL);
-    if (id < 0) return;
-    register_window_context(id);
-    font_window = id;
-    gui_window_set_close_action(&desktop, id, fonts_closed, NULL);
-    sys_reg_get_str("USER/fonts/default", font_path, sizeof(font_path));
-    gui_control_add(&desktop, id, GUI_LABEL, 12, 8, 520, 16, "Select .ttf/.otf from /usr/fonts; bitmap renderer remains active.");
-    font_list_control = gui_control_add(&desktop, id, GUI_LIST, 12, 34, 520, 320, "");
-    char size_text[16];
-    uint32_t point_size = sys_reg_get_u32("USER/fonts/size_pt");
-    if (point_size < 6 || point_size > 36) point_size = 12;
-    size_text[0] = (char)('0' + point_size / 10);
-    size_text[1] = (char)('0' + point_size % 10);
-    size_text[2] = '\0';
-    gui_control_add(&desktop, id, GUI_LABEL, 12, 366, 120, 16, "Font size (pt)");
-    gui_control_add(&desktop, id, GUI_TEXTFIELD, 132, 360, 56, 26, size_text);
-    gui_control_add(&desktop, id, GUI_BUTTON, 430, 364, 100, 28, "Apply");
-    gui_window_set_list_action(&desktop, id, font_select, NULL);
-    gui_window_find(&desktop, id)->action = font_apply;
-    load_fonts();
-}
-
 static void settings_apply(void* context, GuiControl* control) {
     (void)control;
     int window_id = (int)(intptr_t)context;
-    if (window_id < 0 || window_id >= GUI_MAX_WINDOWS || !gui_window_find(&desktop, window_id)->used) return;
+    if (window_id < 0 || window_id >= GUI_MAX_WINDOWS || !gui_window_find(&desktop, window_id) || !gui_window_find(&desktop, window_id)->used) return;
     GuiWindow* window = gui_window_find(&desktop, window_id);
+    if (!window) return;
     if (control->text[0] == 'A') {
         uint32_t background;
         uint32_t accent;
@@ -1259,7 +659,7 @@ static void spawn_desktop_app(const char* path) {
 }
 
 static void launch_application(int application) {
-    if (application == 0) spawn_desktop_app("/bin/SH.ELF");
+    if (application == 0) open_terminal();
     else if (application == 1) spawn_desktop_app("/bin/FILES.ELF");
     else if (application == 2) spawn_desktop_app("/bin/NOTES.ELF");
     else if (application == 3) spawn_desktop_app("/bin/REGISTRY.ELF");
@@ -1348,7 +748,6 @@ int main(int argc, char** argv, char** envp) {
     window_server_init(&window_server, &desktop);
     sys_window_register();
     gui_desktop_set_launch_action(&desktop, launch_application);
-    gui_desktop_set_key_action(&desktop, files_key_action, NULL);
     uint32_t background = sys_reg_get_u32("USER/desktop/background");
     uint32_t accent = sys_reg_get_u32("USER/desktop/accent");
     if (accent) gui_desktop_set_theme(&desktop, background ? background : COLOR_BACKGROUND, accent);

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 USER_DIR=user
-DESKTOP_DIR=$USER_DIR/desktop
+DESKTOP_DIR=$USER_DIR/gui_addon
 BUILD=build/user
 INSTALL_TO_DISK=${1:-}
 
@@ -83,6 +83,7 @@ x86_64-linux-gnu-gcc -c -O0 -o "$BUILD/DESKTOP.o" "$DESKTOP_DIR/desktop.c" \
     -ffreestanding -nostdlib -fno-pic -fno-pie \
     -mno-red-zone -fno-stack-protector \
     -mno-sse -mno-sse2 -mno-mmx -I"$USER_DIR"
+DESKTOP_DIR=$USER_DIR/gui_addon
 x86_64-linux-gnu-gcc -c -O0 -o "$BUILD/gui.o" "$DESKTOP_DIR/gui.c" \
     -ffreestanding -nostdlib -fno-pic -fno-pie \
     -mno-red-zone -fno-stack-protector \

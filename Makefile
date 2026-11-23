@@ -106,11 +106,12 @@ $(ISO_IMAGE): $(BUILD_DIR)/kernel.elf $(LOADER_EFI) $(BOOT_CONFIG)
 
 
 run: $(ISO_IMAGE)
+	bash user/build.sh --install-disk
 	qemu-system-x86_64 \
 		-cdrom $< \
 		-m 256 \
 		-serial stdio \
-		-bios /usr/share/ovmf/OVMF.fd \
+		-bios /usr/share/OVMF/x64/OVMF.4m.fd \
 		-no-reboot \
 		-no-shutdown \
 		-drive file=disk.img,format=raw,if=none,id=nvme0 \
@@ -118,6 +119,7 @@ run: $(ISO_IMAGE)
 		-netdev user,id=net0 -device e1000,netdev=net0
 
 run-kvm: $(ISO_IMAGE)
+	bash user/build.sh --install-disk
 	qemu-system-x86_64 \
 		-cdrom $< \
 		-m 256 \

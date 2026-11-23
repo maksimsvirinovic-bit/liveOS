@@ -1,5 +1,5 @@
-#include "../../sys.h"
-#include "../gui.h"
+#include "sys.h"
+#include "gui_addon/gui.h"
 
 #define MAX_ENTRIES 32
 #define PATH_MAX 192

@@ -1,5 +1,5 @@
-#include "../../sys.h"
-#include "../gui.h"
+#include "sys.h"
+#include "gui_addon/gui.h"
 
 int main(int argc, char** argv, char** envp) {
     (void)argc; (void)argv; (void)envp;

@@ -1,5 +1,5 @@
-#include "../../sys.h"
-#include "../gui.h"
+#include "sys.h"
+#include "gui_addon/gui.h"
 
 #define TEXT_MAX 900
 
