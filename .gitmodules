@@ -1,0 +1,3 @@
+[submodule "EFI/edk2"]
+	path = EFI/edk2
+	url = https://github.com/maksimsvirinovic-bit/liveOS-Bootloader.git
