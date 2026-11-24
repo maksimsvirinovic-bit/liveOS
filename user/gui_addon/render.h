@@ -16,5 +16,7 @@ void render_present_union(int x1, int y1, int x2, int y2, int width, int height)
 void render_drag_capture(void);
 void render_drag_restore(void);
 void render_drag_restore_union(int x1, int y1, int x2, int y2, int width, int height);
+void render_fill_rect_alpha(int x, int y, int width, int height, uint32_t color, uint8_t alpha);
+void render_blur_rect(int x, int y, int width, int height, int radius);
 
 #endif

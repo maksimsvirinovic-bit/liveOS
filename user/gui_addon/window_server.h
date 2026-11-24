@@ -26,21 +26,13 @@ typedef enum {
 
 typedef struct {
     WindowServerMessageType type;
-    int32_t window_id;
-    int32_t owner_pid;
-    int32_t x;
-    int32_t y;
-    int32_t width;
-    int32_t height;
-    int32_t control_type;
-    int32_t control_id;
-    int32_t selected;
-    int32_t input_type;
-    int32_t input_key;
+    int32_t window_id, owner_pid;
+    int32_t x, y, width, height;
+    int32_t control_type, control_id, selected;
+    int32_t input_type, input_key;
     int32_t result;
     int32_t has_alpha;
-    uint32_t start_ms;
-    uint32_t duration_ms;
+    uint32_t start_ms, duration_ms;
     uint32_t payload_size;
     uint8_t payload[256];
     char title[48];

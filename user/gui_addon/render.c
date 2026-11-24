@@ -201,3 +201,93 @@ void render_drag_restore(void) {
     uint64_t size = (uint64_t)screen_width * screen_height;
     for (uint64_t i = 0; i < size; i++) backbuffer[i] = drag_snapshot[i];
 }
+
+void render_fill_rect_alpha(int x, int y, int width, int height, uint32_t color, uint8_t alpha) {
+    if (!backbuffer || width <= 0 || height <= 0 || alpha == 0) return;
+    if (x < 0) { width += x; x = 0; }
+    if (y < 0) { height += y; y = 0; }
+    if (x >= (int)screen_width || y >= (int)screen_height) return;
+    if (width > (int)screen_width - x) width = (int)screen_width - x;
+    if (height > (int)screen_height - y) height = (int)screen_height - y;
+    if (width <= 0 || height <= 0) return;
+
+    uint32_t sr = (color >> 16) & 0xFF;
+    uint32_t sg = (color >> 8) & 0xFF;
+    uint32_t sb = color & 0xFF;
+    uint32_t inv = 255 - alpha;
+
+    for (int row = 0; row < height; row++) {
+        uint32_t* dst = backbuffer + (uint64_t)(y + row) * screen_width + x;
+        for (int col = 0; col < width; col++) {
+            uint32_t d = dst[col];
+            uint32_t dr = (d >> 16) & 0xFF;
+            uint32_t dg = (d >> 8) & 0xFF;
+            uint32_t db = d & 0xFF;
+            uint32_t r = (sr * alpha + dr * inv) / 255;
+            uint32_t g = (sg * alpha + dg * inv) / 255;
+            uint32_t b = (sb * alpha + db * inv) / 255;
+            dst[col] = (r << 16) | (g << 8) | b;
+        }
+    }
+}
+
+void render_blur_rect(int x, int y, int width, int height, int radius) {
+    if (!backbuffer || width <= 0 || height <= 0 || radius <= 0) return;
+    if (x < 0) { width += x; x = 0; }
+    if (y < 0) { height += y; y = 0; }
+    if (x + width > (int)screen_width) width = (int)screen_width - x;
+    if (y + height > (int)screen_height) height = (int)screen_height - y;
+    if (width <= 0 || height <= 0) return;
+
+    uint32_t* tmp = (uint32_t*)malloc((uint64_t)width * height * sizeof(uint32_t));
+    if (!tmp) return;
+
+    for (int row = 0; row < height; row++) {
+        uint32_t* src = backbuffer + (uint64_t)(y + row) * screen_width + x;
+        uint32_t sr = 0, sg = 0, sb = 0;
+        int count = 0;
+        for (int i = -radius; i <= radius; i++) {
+            int idx = i < 0 ? 0 : (i >= width ? width - 1 : i);
+            uint32_t p = src[idx];
+            sr += (p >> 16) & 0xFF; sg += (p >> 8) & 0xFF; sb += p & 0xFF;
+            count++;
+        }
+        for (int col = 0; col < width; col++) {
+            tmp[(uint64_t)row * width + col] =
+                ((sr / count) << 16) | ((sg / count) << 8) | (sb / count);
+            int out_idx = col - radius;
+            int in_idx = col + radius + 1;
+            if (out_idx < 0) out_idx = 0;
+            if (in_idx >= width) in_idx = width - 1;
+            uint32_t pout = src[out_idx], pin = src[in_idx];
+            sr += ((pin >> 16) & 0xFF) - ((pout >> 16) & 0xFF);
+            sg += ((pin >> 8) & 0xFF) - ((pout >> 8) & 0xFF);
+            sb += (pin & 0xFF) - (pout & 0xFF);
+        }
+    }
+
+    for (int col = 0; col < width; col++) {
+        uint32_t sr = 0, sg = 0, sb = 0;
+        int count = 0;
+        for (int i = -radius; i <= radius; i++) {
+            int idx = i < 0 ? 0 : (i >= height ? height - 1 : i);
+            uint32_t p = tmp[(uint64_t)idx * width + col];
+            sr += (p >> 16) & 0xFF; sg += (p >> 8) & 0xFF; sb += p & 0xFF;
+            count++;
+        }
+        for (int row = 0; row < height; row++) {
+            uint32_t* dst = backbuffer + (uint64_t)(y + row) * screen_width + x;
+            dst[col] = ((sr / count) << 16) | ((sg / count) << 8) | (sb / count);
+            int out_idx = row - radius;
+            int in_idx = row + radius + 1;
+            if (out_idx < 0) out_idx = 0;
+            if (in_idx >= height) in_idx = height - 1;
+            uint32_t pout = tmp[(uint64_t)out_idx * width + col];
+            uint32_t pin = tmp[(uint64_t)in_idx * width + col];
+            sr += ((pin >> 16) & 0xFF) - ((pout >> 16) & 0xFF);
+            sg += ((pin >> 8) & 0xFF) - ((pout >> 8) & 0xFF);
+            sb += (pin & 0xFF) - (pout & 0xFF);
+        }
+    }
+    free(tmp);
+}

@@ -142,6 +142,8 @@ typedef struct {
     GuiAnimation* animations;
     uint32_t animation_count;
     uint32_t animation_capacity;
+
+    uint32_t transparent_drag_enabled;
 } GuiDesktop;
 
 void  gui_desktop_init(GuiDesktop* d, uint32_t w, uint32_t h);
@@ -150,6 +152,8 @@ void  gui_desktop_set_theme(GuiDesktop* d, uint32_t bg, uint32_t accent);
 void  gui_desktop_set_launch_action(GuiDesktop* d, GuiLaunchAction a, void* ctx);
 void  gui_desktop_set_key_action(GuiDesktop* d, GuiKeyAction a, void* ctx);
 void  gui_desktop_draw(GuiDesktop* d);
+void  gui_desktop_draw_excluding(GuiDesktop* d, int excluded_window);
+void  gui_desktop_draw_window(GuiDesktop* d, int window_id);
 int   gui_desktop_poll(GuiDesktop* d);
 GuiWindow* gui_window_find(GuiDesktop* d, int id);
 int        gui_window_create(GuiDesktop* d, const char* title, int x, int y,

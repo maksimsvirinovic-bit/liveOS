@@ -520,6 +520,16 @@ static void rounded_fill(GuiDesktop* d, int x, int y, int w, int h, uint32_t col
     }
 }
 
+static void rounded_fill_alpha(GuiDesktop* d, int x, int y, int w, int h,
+                               uint32_t color, uint8_t alpha, int top_only) {
+    if (w <= 0 || h <= 0 || alpha == 0) return;
+    for (int row = 0; row < h; row++) {
+        int inset = rounded_inset(row, h);
+        if (top_only && row >= WINDOW_RADIUS) inset = 0;
+        render_fill_rect_alpha(x + inset, y + row, w - inset * 2, 1, color, alpha);
+    }
+}
+
 static uint32_t text_len(const char* s) {
     uint32_t n = 0;
     while (s && s[n]) n++;
@@ -642,23 +652,38 @@ static void draw_control(GuiDesktop* d, GuiControl* c, int x, int y) {
 static void draw_window(GuiDesktop* d, GuiWindow* w) {
     if (!w->used || !w->visible || w->minimized) return;
     int focused = (d->focused_window == w->id);
+
+    int transparent_drag = 0;
+    if (d->transparent_drag_enabled && w->dragging) transparent_drag = 1;
+
+    rounded_fill_alpha(d, w->x + 4, w->y + 4, w->width, w->height, 0x00000000, 90, 0);
+
+    if (focused) {
+        render_blur_rect(w->x + 1, w->y + 1, w->width - 2, w->height - 2, 5);
+    }
+
+    uint8_t body_alpha;
+    if (transparent_drag) body_alpha = 120;
+    else body_alpha = focused ? 120 : 180;
+    rounded_fill_alpha(d, w->x + 1, w->y + 1, w->width - 2, w->height - 2,
+                    C_PANEL, body_alpha, 0);
+
     uint32_t title_color = focused ? C_TITLE_F : C_TITLE;
-    uint32_t border_color = focused ? C_TITLE_F : C_BORDER;
-    rounded_fill(d, w->x + 3, w->y + 3, w->width, w->height, C_BLACK, 0);
-    rounded_fill(d, w->x, w->y, w->width, w->height, border_color, 0);
-    rounded_fill(d, w->x + 1, w->y + 1, w->width - 2, w->height - 2, C_PANEL, 0);
-    rounded_fill(d, w->x + 1, w->y + 1, w->width - 2, TITLE_H, title_color, 1);
+    rounded_fill_alpha(d, w->x + 1, w->y + 1, w->width - 2, TITLE_H,
+                       title_color, focused ? 220 : 200, 1);
+    
     int buttons_x = w->x + w->width - 3 * TITLE_BUTTON - 4;
     render_draw_text(w->x + 8, w->y + 8, C_TEXT, title_color, w->title);
     fill_clamped(d, buttons_x, w->y + 3, TITLE_BUTTON - 1, TITLE_H - 6, C_MINIMIZE);
     fill_clamped(d, buttons_x + TITLE_BUTTON, w->y + 3, TITLE_BUTTON - 1, TITLE_H - 6, C_MAXIMIZE);
     fill_clamped(d, buttons_x + 2 * TITLE_BUTTON, w->y + 3, TITLE_BUTTON - 1, TITLE_H - 6, C_CLOSE);
     fill_clamped(d, buttons_x + 5, w->y + 14, 8, 2, C_WHITE);
-    border_clamped(d, buttons_x + TITLE_BUTTON + 5, w->y + 6, 9, 9, C_WHITE);
-    for (int i = 0; i < 8; i++) {
+    border_clamped(d, buttons_x + TITLE_BUTTON + 4, w->y + 7, 9, 9, C_WHITE);
+    for (int i = 0; i < 7; i++) {
         fill_clamped(d, buttons_x + 2 * TITLE_BUTTON + 5 + i, w->y + 7 + i, 2, 2, C_WHITE);
         fill_clamped(d, buttons_x + 2 * TITLE_BUTTON + 11 - i, w->y + 7 + i, 2, 2, C_WHITE);
     }
+
     for (GuiControl* c = w->controls; c; c = c->next) {
         draw_control(d, c, w->x + c->x, w->y + TITLE_H + c->y);
     }

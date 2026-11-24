@@ -60,11 +60,11 @@ build_program MKDIR MKDIR
 build_program RMDIR RMDIR
 build_program RM RM
 build_program INIT INIT
-build_gui_program FILES FILES
-build_gui_program desktop/apps/notes_app NOTES
-build_gui_program desktop/apps/registry_app REGISTRY
-build_gui_program desktop/apps/settings_app SETTINGS
-build_gui_program desktop/apps/fonts_app FONTS
+#build_gui_program FILES FILES
+#build_gui_program desktop/apps/notes_app NOTES
+#build_gui_program desktop/apps/registry_app REGISTRY
+#build_gui_program desktop/apps/settings_app SETTINGS
+#build_gui_program desktop/apps/fonts_app FONTS
 build_program FALLBACK_SHELL FALLBACK_SHELL
 build_program NETTEST NETTEST
 x86_64-linux-gnu-gcc -c -O0 -o "$BUILD/PKG.o" "$USER_DIR/PKG.c" \
@@ -79,29 +79,50 @@ ld -m elf_x86_64 -T "$USER_DIR/linker.ld" -o "$BUILD/PKG.ELF" \
     "$BUILD/_start.o" "$BUILD/PKG.o" "$BUILD/zip.o" "$BUILD/libc.o" "$BUILD/malloc.o"
 
 DESKTOP_DIR=$USER_DIR/desktop
-x86_64-linux-gnu-gcc -c -O0 -o "$BUILD/DESKTOP.o" "$DESKTOP_DIR/desktop.c" \
+GUI_DIR=$USER_DIR/gui_addon
+
+# общий gui + render + window_server (один раз)
+x86_64-linux-gnu-gcc -c -O0 -o "$BUILD/gui.o" "$GUI_DIR/gui.c" \
     -ffreestanding -nostdlib -fno-pic -fno-pie \
     -mno-red-zone -fno-stack-protector \
-    -mno-sse -mno-sse2 -mno-mmx -I"$USER_DIR"
-DESKTOP_DIR=$USER_DIR/gui_addon
-x86_64-linux-gnu-gcc -c -O0 -o "$BUILD/gui.o" "$DESKTOP_DIR/gui.c" \
+    -mno-sse -mno-sse2 -mno-mmx -I"$USER_DIR" -I"$GUI_DIR" -I"$DESKTOP_DIR"
+x86_64-linux-gnu-gcc -c -O0 -o "$BUILD/render.o" "$GUI_DIR/render.c" \
     -ffreestanding -nostdlib -fno-pic -fno-pie \
     -mno-red-zone -fno-stack-protector \
-    -mno-sse -mno-sse2 -mno-mmx -I"$USER_DIR"
-x86_64-linux-gnu-gcc -c -O0 -o "$BUILD/render.o" "$DESKTOP_DIR/render.c" \
+    -mno-sse -mno-sse2 -mno-mmx -I"$USER_DIR" -I"$GUI_DIR"
+x86_64-linux-gnu-gcc -c -O0 -o "$BUILD/window_server.o" "$GUI_DIR/window_server.c" \
     -ffreestanding -nostdlib -fno-pic -fno-pie \
     -mno-red-zone -fno-stack-protector \
-    -mno-sse -mno-sse2 -mno-mmx -I"$USER_DIR"
-x86_64-linux-gnu-gcc -c -O0 -o "$BUILD/window_server.o" "$DESKTOP_DIR/window_server.c" \
-    -ffreestanding -nostdlib -fno-pic -fno-pie \
-    -mno-red-zone -fno-stack-protector \
-    -mno-sse -mno-sse2 -mno-mmx -I"$USER_DIR"
+    -mno-sse -mno-sse2 -mno-mmx -I"$USER_DIR" -I"$GUI_DIR"
 x86_64-linux-gnu-gcc -c -O0 -o "$BUILD/user_font.o" kernel/graphics/font_8x8.c \
     -ffreestanding -nostdlib -fno-pic -fno-pie \
     -mno-red-zone -fno-stack-protector \
     -mno-sse -mno-sse2 -mno-mmx
+
+for src in main app_launcher; do
+    x86_64-linux-gnu-gcc -c -O0 -o "$BUILD/desktop_$src.o" "$DESKTOP_DIR/$src.c" \
+        -ffreestanding -nostdlib -fno-pic -fno-pie \
+        -mno-red-zone -fno-stack-protector \
+        -mno-sse -mno-sse2 -mno-mmx -I"$USER_DIR" -I"$GUI_DIR" -I"$DESKTOP_DIR"
+done
+
+mkdir -p "$BUILD/builtin"
+
+for src in builtin/terminal builtin/ui_studio; do
+    x86_64-linux-gnu-gcc -c -O0 -o "$BUILD/$src.o" "$DESKTOP_DIR/$src.c" \
+        -ffreestanding -nostdlib -fno-pic -fno-pie \
+        -mno-red-zone -fno-stack-protector \
+        -mno-sse -mno-sse2 -mno-mmx -I"$USER_DIR" -I"$GUI_DIR" -I"$DESKTOP_DIR"
+done
+
 ld -m elf_x86_64 -T "$USER_DIR/linker.ld" -o "$BUILD/DESKTOP.ELF" \
-    "$BUILD/_start.o" "$BUILD/DESKTOP.o" "$BUILD/gui.o" "$BUILD/render.o" "$BUILD/window_server.o" "$BUILD/user_font.o" "$BUILD/libc.o" "$BUILD/malloc.o"
+    "$BUILD/_start.o" \
+    "$BUILD/desktop_main.o" \
+    "$BUILD/desktop_app_launcher.o" \
+    "$BUILD/builtin/terminal.o" \
+    "$BUILD/builtin/ui_studio.o" \
+    "$BUILD/gui.o" "$BUILD/render.o" "$BUILD/window_server.o" \
+    "$BUILD/user_font.o" "$BUILD/libc.o" "$BUILD/malloc.o"
 
 if [[ "$INSTALL_TO_DISK" == "--install-disk" ]]; then
     MOUNT_DIR=$(mktemp -d)
