@@ -52,8 +52,6 @@ static void region_merge(void) {
 }
 
 void vmalloc_init(void) {
-    spinlock_t* sl = kmalloc(sizeof(spinlock_t));
-    spin_lock_irqsave(sl);
     g_regions = NULL;
     g_vmalloc_used = 0;
 
@@ -69,8 +67,6 @@ void vmalloc_init(void) {
     serial_emergency_print("..");
     serial_emergency_print_hex(VMALLOC_END);
     serial_emergency_print(")\n");
-    spin_unlock_irqrestore(sl);
-    kfree(sl);
 }
 
 static uint64_t align_up(uint64_t v, uint64_t a) {
@@ -124,20 +120,14 @@ uint64_t vmalloc_reserve(uint64_t size) {
 }
 
 void* vmalloc_page(void) {
-    spinlock_t* sl = kmalloc(sizeof(spinlock_t));
-    spin_lock_irqsave(sl);
     uint64_t virt = vmalloc_reserve(PAGE_SIZE);
     if (!virt){
-        spin_unlock_irqrestore(sl);
-        kfree(sl);
         return NULL;
     }
 
     uint64_t phys = pmm_alloc_page();
     if (!phys) {
         vfree((void*)(uintptr_t)virt);
-        spin_unlock_irqrestore(sl);
-        kfree(sl);
         return NULL;
     }
 
@@ -145,13 +135,9 @@ void* vmalloc_page(void) {
                       PAGE_PRESENT | PAGE_WRITE) != 0) {
         pmm_free_page(phys);
         vfree((void*)(uintptr_t)virt);
-        spin_unlock_irqrestore(sl);
-        kfree(sl);
         return NULL;
     }
 
-    spin_unlock_irqrestore(sl);
-    kfree(sl);
     return (void*)(uintptr_t)virt;
 }
 
@@ -172,8 +158,6 @@ uint64_t vmalloc_kernel_stack(void) {
 
 void vfree(void* ptr) {
     if (!ptr) return;
-    spinlock_t* sl = kmalloc(sizeof(spinlock_t));
-    spin_lock_irqsave(sl);
     uint64_t addr = (uint64_t)(uintptr_t)ptr;
 
     VmallocRegion* r = g_regions;
@@ -182,8 +166,6 @@ void vfree(void* ptr) {
         r = r->next;
     }
     if (!r) {
-        spin_unlock_irqrestore(sl);
-        kfree(sl);
         serial_emergency_print("vfree: unknown region\n");
         return;
     }
@@ -207,19 +189,13 @@ void vfree(void* ptr) {
     g_vmalloc_used -= (r->end - r->start);
     r->free = 1;
     region_merge();
-    spin_unlock_irqrestore(sl);
-    kfree(sl);
 }
 
 void vfree_kernel_stack(uint64_t base) {
-    spinlock_t* sl = kmalloc(sizeof(spinlock_t));
-    spin_lock_irqsave(sl);
     if (base) {
         uint64_t phys = virt_to_phys(base);
         pmm_free_pages(phys, (uint32_t)(KERNEL_STACK_SIZE / PAGE_SIZE));
     }
-    spin_unlock_irqrestore(sl);
-    kfree(sl);
 }
 
 uint64_t vmalloc_used(void)  { return g_vmalloc_used; }
